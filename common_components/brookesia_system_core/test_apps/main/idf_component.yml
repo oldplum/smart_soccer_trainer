@@ -1,0 +1,11 @@
+## IDF Component Manager Manifest File
+dependencies:
+  brookesia_system_core:
+    version: "*"
+    override_path: "../../../brookesia_system_core"
+
+  espressif/esp-lib-utils:
+    # version: "0.3.*"
+    # public: true
+    git: "https://github.com/esp-arduino-libs/esp-lib-utils.git"
+    version: "fix/fix_build_error_on_idf6"

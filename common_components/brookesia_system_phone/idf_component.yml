@@ -1,0 +1,13 @@
+version: "0.7.0"
+description: ESP-Brookesia-Core is a core component of ESP-Brookesia.
+url: https://github.com/espressif/esp-brookesia/tree/master/core/brookesia_core
+issues: https://github.com/espressif/esp-brookesia/issues
+repository: https://github.com/espressif/esp-brookesia.git
+dependencies:
+  idf: ">=5.3"
+
+  # Core
+  espressif/brookesia_system_core:
+    path: "../brookesia_system_core"
+    version: "0.7.*"
+    public: true
