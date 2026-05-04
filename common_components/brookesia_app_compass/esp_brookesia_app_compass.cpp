@@ -6,6 +6,7 @@
 #include "BMM350_SensorAPI/bmm350_defs.h"
 #include "BMM350_SensorAPI/bmm350.h"
 #include "BMM350_SensorAPI/examples/common/common.h"
+#include "bmi270_api.h"
 #include "driver/gpio.h"
 #include "esp_brookesia_app_compass.hpp"
 #include "esp_err.h"
@@ -15,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "math.h"
+#include <cstdio>
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "ui/ui.h"
@@ -37,6 +39,8 @@ using namespace esp_brookesia::gui;
 #define I2C_MASTER_NUM I2C_NUM_0
 #define I2C_MASTER_FREQ_HZ (100 * 1000)
 #define SAMPLE_RATE_MS 10 // 10ms sampling interval
+#define ACC_LOG_INTERVAL_US 10000
+#define ACC_COUNTS_PER_G 2048.0f
 
 #define COMPLEMENTARY_FILTER_ALPHA 0.9f
 #define HEADING_FILTER_ALPHA 0.85f  // Low-pass filter for heading smoothing (0.85 = 85% previous, 15% new)
@@ -315,7 +319,7 @@ bool Compass::initSensors()
     if (rslt == BMI2_OK) {
         // Configure accelerometer
         config[BMI2_ACCEL].cfg.acc.odr = BMI2_ACC_ODR_100HZ;        // 100Hz sample rate
-        config[BMI2_ACCEL].cfg.acc.range = BMI2_ACC_RANGE_4G;        // ±4G range
+        config[BMI2_ACCEL].cfg.acc.range = BMI2_ACC_RANGE_16G;       // ±16G range
         config[BMI2_ACCEL].cfg.acc.bwp = BMI2_ACC_NORMAL_AVG4;        // Normal averaging
         config[BMI2_ACCEL].cfg.acc.filter_perf = BMI2_PERF_OPT_MODE; // Filter performance
 
@@ -326,7 +330,7 @@ bool Compass::initSensors()
         config[BMI2_GYRO].cfg.gyr.noise_perf = BMI2_POWER_OPT_MODE;  // Noise performance
         config[BMI2_GYRO].cfg.gyr.filter_perf = BMI2_PERF_OPT_MODE; // Filter performance
 
-        rslt = bmi2_set_sensor_config(config, 2, bmi2_dev_);
+        rslt = bmi270_set_sensor_config(config, 2, bmi2_dev_);
         if (rslt != BMI2_OK) {
             ESP_LOGE(TAG, "BMI270 sensor config failed: %d", rslt);
             return false;
@@ -831,13 +835,23 @@ void Compass::apply_tilt_compensation(float mag_x, float mag_y, float mag_z, flo
 void Compass::updateSensorData()
 {
     struct bmi2_sens_data sensor_data = {0};
+    static int64_t last_acc_log_us = 0;
     /* Read BMI270 accelerometer and gyroscope data */
     int8_t rslt = bmi2_get_sensor_data(&sensor_data, bmi2_dev_);
     if (rslt == BMI2_OK) {
+        int64_t now_us = esp_timer_get_time();
+        if ((last_acc_log_us == 0) || (now_us - last_acc_log_us >= ACC_LOG_INTERVAL_US)) {
+            float float_x = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
+            float float_y = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
+            float float_z = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
+            printf("ACC:%.2f,%.2f,%.2f\n", float_x, float_y, float_z);
+            last_acc_log_us = now_us;
+        }
+
         /* Parse accelerometer data */
-        float acc_x_mg = (float)sensor_data.acc.x / 16384.0f;
-        float acc_y_mg = -(float)sensor_data.acc.y / 16384.0f;
-        float acc_z_mg = -(float)sensor_data.acc.z / 16384.0f;
+        float acc_x_mg = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
+        float acc_y_mg = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
+        float acc_z_mg = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
 
         /* Parse gyroscope data */
         float gyro_x_dps = (float)sensor_data.gyr.x / 16.4f;
