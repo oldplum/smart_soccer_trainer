@@ -30,7 +30,7 @@ constexpr AppLauncherData STYLESHEET_DEFAULT_DARK_APP_LAUNCHER_DATA = {
         .size = gui::StyleSize::RECT_PERCENT(100, 100),
     },
     .table = {
-        .default_num = 3,
+        .default_num = 2,
         .size = gui::StyleSize::RECT_PERCENT(100, 70),
     },
     .indicator = {

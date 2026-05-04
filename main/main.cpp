@@ -88,7 +88,7 @@ extern "C" void app_main(void)
         /* Init and install apps from registry */
         std::vector<systems::base::Manager::RegistryAppInfo> inited_apps;
         ESP_UTILS_CHECK_FALSE_EXIT(phone->initAppFromRegistry(inited_apps), "Init app registry failed");
-        std::vector<std::string> ordered_app_names = {"Environment", "Gesture Detect", "Compass", "2048", "Factory Guide"};
+        std::vector<std::string> ordered_app_names = {"Environment", "Gesture Detect", "Compass", "Factory Guide"};
         ESP_UTILS_CHECK_FALSE_EXIT(phone->installAppFromRegistry(inited_apps, &ordered_app_names), "Install app registry failed");
 
         /* Create a timer to update the clock */
