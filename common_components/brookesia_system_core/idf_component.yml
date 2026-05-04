@@ -12,7 +12,7 @@ dependencies:
     public: true
 
   esp-lib-utils:
-    override_path: "../espressif__esp-lib-utils"
+    version: "*"
     public: true
 
   espressif/esp-boost:

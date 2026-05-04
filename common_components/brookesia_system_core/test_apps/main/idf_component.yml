@@ -2,7 +2,6 @@
 dependencies:
   brookesia_system_core:
     version: "*"
-    override_path: "../../../brookesia_system_core"
 
   espressif/esp-lib-utils:
     # version: "0.3.*"

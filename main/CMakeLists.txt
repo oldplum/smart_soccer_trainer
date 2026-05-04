@@ -2,7 +2,7 @@ idf_component_register(
     SRC_DIRS "."
     INCLUDE_DIRS ".")
 
-set(EXTRA_COMPONENT_DIRS "../../../components")
+set(EXTRA_COMPONENT_DIRS "../common_components")
 
 target_compile_options(${COMPONENT_LIB} INTERFACE -Wno-missing-field-initializers)
 
