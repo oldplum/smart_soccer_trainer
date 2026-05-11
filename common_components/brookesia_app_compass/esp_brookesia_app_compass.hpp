@@ -14,7 +14,6 @@
 #include "boost/thread.hpp"
 #include "brookesia/system_phone/app.hpp"
 #include "i2c_bus.h"
-#include "lvgl.h"
 
 namespace esp_brookesia::apps {
 
@@ -53,6 +52,10 @@ public:
     void setCorrect(bool correct);
     void externalBack();
     bool isCalibrated() const;
+
+    /* Public methods for direct sensor control */
+    bool startSensorCollection();
+    void stopSensorCollection();
 
     // NVS storage methods
     bool saveCalibrationToNVS();

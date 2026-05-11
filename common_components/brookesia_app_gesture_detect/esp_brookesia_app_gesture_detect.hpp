@@ -14,7 +14,16 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "i2c_bus.h"
-#include "ui/ui_app.h"
+
+/* Gesture types */
+typedef enum {
+    GESTURE_NONE = 0,
+    GESTURE_SHAKE = 1,
+    GESTURE_PICKUP = 2,
+    GESTURE_PUTDOWN = 3,
+    GESTURE_ROLL = 4,
+} gesture_t;
+
 namespace esp_brookesia::apps {
 
 typedef enum {

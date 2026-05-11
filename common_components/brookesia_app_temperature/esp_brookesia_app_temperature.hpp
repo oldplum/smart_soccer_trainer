@@ -32,6 +32,10 @@ public:
 
     static Temperature *requestInstance();
 
+    /* Public methods for direct sensor control */
+    bool startSensorCollection();
+    void stopSensorCollection();
+
 protected:
     bool run() override;
     bool back() override;

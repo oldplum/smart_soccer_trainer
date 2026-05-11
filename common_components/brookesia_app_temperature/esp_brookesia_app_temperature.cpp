@@ -17,8 +17,8 @@
 #include "freertos/task.h"
 #include "i2c_bus.h"
 #include "math.h"
-#include "ui/ui.h"
 #include "esp_board_manager.h"
+#include "../../main/soccer_data_sync.h"
 
 static const char *TAG = "TemperatureApp";
 
@@ -98,15 +98,13 @@ bool Temperature::deinit()
 {
     ESP_LOGI(TAG, "Deinitializing Temperature app");
 
-    destroyTemperatureUI();
     deinitSensors();
 
     _bme_running = false;
     if (_bme_thread.joinable()) {
         _bme_thread.join();
     }
-    i2c_del_master_bus(i2c_bus_);
-    i2c_bus_ = nullptr;
+    /* i2c_bus_ is already deleted in deinitSensors() */
     return true;
 }
 
@@ -126,8 +124,6 @@ bool Temperature::run()
         }
     }
 
-    createTemperatureUI();
-
     if (!is_initialized_) {
         return true;
     }
@@ -146,6 +142,42 @@ bool Temperature::back()
     return close();
 }
 
+bool Temperature::startSensorCollection()
+{
+    ESP_LOGI(TAG, "Starting sensor collection");
+    
+    if (!initSensors()) {
+        ESP_LOGE(TAG, "Failed to initialize sensors");
+        is_initialized_ = false;
+        return false;
+    }
+    
+    if (init_bsec() != BSEC_OK) {
+        ESP_LOGE(TAG, "Failed to initialize BSEC");
+        is_initialized_ = false;
+        return false;
+    }
+    
+    is_initialized_ = true;
+    _bme_running = true;
+    boost::thread::attributes thread_attrs;
+    thread_attrs.set_stack_size(4 * 1024);
+    _bme_thread = boost::thread(thread_attrs, boost::bind(&Temperature::bmeDataThread, this));
+    
+    ESP_LOGI(TAG, "Sensor collection started successfully");
+    return true;
+}
+
+void Temperature::stopSensorCollection()
+{
+    ESP_LOGI(TAG, "Stopping sensor collection");
+    _bme_running = false;
+    if (_bme_thread.joinable()) {
+        _bme_thread.join();
+    }
+    ESP_LOGI(TAG, "Sensor collection stopped");
+}
+
 bool Temperature::close()
 {
     ESP_LOGI(TAG, "Closing Temperature app");
@@ -160,15 +192,11 @@ bool Temperature::close()
 
 void Temperature::createTemperatureUI()
 {
-    ESP_LOGI(TAG, "Creating Temperature UI");
-    Temperature_ui_init(is_initialized_);
-    ESP_LOGI(TAG, "Temperature UI created successfully");
+    (void)is_initialized_;
 }
 
 void Temperature::destroyTemperatureUI()
 {
-    Temperature_ui_destroy();
-    ESP_LOGI(TAG, "Temperature UI destroyed");
 }
 
 esp_err_t Temperature::init_hardware()
@@ -360,8 +388,10 @@ bool Temperature::deinitSensors()
 {
     ESP_LOGI(TAG, "Deinitializing sensors...");
     bme69x_coines_deinit();
-    i2c_del_master_bus(i2c_bus_);
-    i2c_bus_ = nullptr;
+    if (i2c_bus_ != nullptr) {
+        i2c_del_master_bus(i2c_bus_);
+        i2c_bus_ = nullptr;
+    }
     return true;
 }
 
@@ -545,15 +575,13 @@ void Temperature::bmeDataThread()
                              pressure, raw_temp, raw_hum, gas, bsec_status,
                              static_iaq, co2_eq, breath_voc);
 
-                if (_bme_running) {
-                    lv_async_call([](void *user_data) {
-                        Temperature *self = static_cast<Temperature *>(user_data);
-                        if (!self->_bme_running) {
-                            return;
-                        }
-                        self->updateTemperatureDisplay();
-                    }, this);
-                }
+                /* Sync environment data to global buffer */
+                g_soccer_sensor_data.temp = this->bsec_temperature;
+                g_soccer_sensor_data.humidity = this->bsec_humidity;
+                g_soccer_sensor_data.pressure = this->bsec_pressure;
+                g_soccer_sensor_data.iaq = this->iaq;
+                g_soccer_sensor_data.timestamp = (uint32_t)(get_timestamp_us() / 1000);
+
             }
 
             int64_t curr_time_us = get_timestamp_us();
@@ -621,90 +649,7 @@ lv_color_t Temperature::getIAQColor(float iaq_value)
 
 void Temperature::updateTemperatureDisplay()
 {
-    char s[32];
-
-    // Update temperature display
-    snprintf(s, sizeof(s), "%.2f", bsec_temperature);
-    lv_label_set_text(ui_TemperatureNumber, s);
-
-    // Update humidity display with sliding average (last 5 values)
-    // Add current humidity to history
-    humidity_history[humidity_history_index] = bsec_humidity;
-    humidity_history_index = (humidity_history_index + 1) % HUMIDITY_AVG_COUNT;
-    if (humidity_history_count < HUMIDITY_AVG_COUNT) {
-        humidity_history_count++;
-    }
-
-    // Calculate average
-    float humidity_sum = 0.0f;
-    for (int i = 0; i < humidity_history_count; i++) {
-        humidity_sum += humidity_history[i];
-    }
-    float humidity_avg = humidity_sum / humidity_history_count;
-
-    // Display with 2 decimal places (percentage sign is separate label)
-    snprintf(s, sizeof(s), "%.2f", humidity_avg);
-    lv_label_set_text(ui_HumidityNumber, s);
-
-    // Update humidity evaluation with ASCII characters and color based on comfort range
-    const char *face_char;
-    lv_color_t color;
-    if (humidity_avg >= 30.0f && humidity_avg <= 60.0f) {
-        // Comfortable range: 30-60%
-        face_char = "^_^";
-        color = lv_color_hex(0x4CAF50);  // Green
-    } else if ((humidity_avg >= 20.0f && humidity_avg < 30.0f) ||
-               (humidity_avg > 60.0f && humidity_avg <= 70.0f)) {
-        // Moderate range: 20-30% or 60-70%
-        face_char = "0_0";
-        color = lv_color_hex(0xFFD600);  // Yellow
-    } else {
-        // Uncomfortable range: <20% or >70%
-        face_char = "T_T";
-        color = lv_color_hex(0xFF6D00);  // Orange
-    }
-    lv_label_set_text(ui_HumidityEvaluation, face_char);
-    lv_obj_set_style_text_color(ui_HumidityEvaluation, color, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-    // Update pressure display - convert to hPa
-    float pressure_hpa = bsec_pressure / 100.0f;
-    snprintf(s, sizeof(s), "%.1f", pressure_hpa);
-    lv_label_set_text(ui_PressureText, s);
-
-    // Calculate difference from standard atmospheric pressure (1013.25 hPa)
-    const float standard_pressure_hpa = 1013.25f;
-    float pressure_diff_from_standard = pressure_hpa - standard_pressure_hpa;
-
-    // Update pressure trend with weather-related text (without arrow)
-    char trend_text[32];
-    if (pressure_diff_from_standard > 5.0f) {
-        snprintf(trend_text, sizeof(trend_text), "Maybe Sunny");
-        lv_obj_set_style_text_color(ui_PressureTrend, lv_color_hex(0x4CAF50), (int)LV_PART_MAIN | (int)LV_STATE_DEFAULT);
-    } else if (pressure_diff_from_standard < -5.0f) {
-        snprintf(trend_text, sizeof(trend_text), "Maybe Rainy");
-        lv_obj_set_style_text_color(ui_PressureTrend, lv_color_hex(0xF44336), (int)LV_PART_MAIN | (int)LV_STATE_DEFAULT);
-    } else {
-        snprintf(trend_text, sizeof(trend_text), "Good");
-        lv_obj_set_style_text_color(ui_PressureTrend, lv_color_hex(0x757575), (int)LV_PART_MAIN | (int)LV_STATE_DEFAULT);
-    }
-    lv_label_set_text(ui_PressureTrend, trend_text);
-
-    previous_pressure = bsec_pressure;
-
-    // Update air quality display - CO2 concentration
-    snprintf(s, sizeof(s), "%.0f", co2_equivalent);
-    lv_label_set_text(ui_AirQualityNumber, s);
-
-    // Update IAQ level text
-    const char *iaq_level = getIAQLevel(iaq);
-    lv_label_set_text(ui_AirQualityLevel, iaq_level);
-
-    // Apply color coding - only number changes color, CO2 and unit stay black
-    lv_color_t iaq_color = getIAQColor(iaq);
-    lv_obj_set_style_text_color(ui_AirQualityCO2, lv_color_hex(0x000000), (int)LV_PART_MAIN | (int)LV_STATE_DEFAULT);  // Fixed black
-    lv_obj_set_style_text_color(ui_AirQualityNumber, iaq_color, (int)LV_PART_MAIN | (int)LV_STATE_DEFAULT);  // Dynamic color
-    lv_obj_set_style_text_color(ui_AirQualityLevel, iaq_color, (int)LV_PART_MAIN | (int)LV_STATE_DEFAULT);  // Dynamic color
-    lv_obj_set_style_text_color(ui_AirQualitySignal, lv_color_hex(0x000000), (int)LV_PART_MAIN | (int)LV_STATE_DEFAULT);  // Fixed black
+    (void)this;
 }
 
 int64_t Temperature::get_timestamp_us()

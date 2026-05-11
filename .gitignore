@@ -105,3 +105,8 @@ output.json
 
 # environment variables
 environment.py
+
+# Local analysis docs generated during this session
+PROJECT_ANALYSIS.md
+IMPLEMENTATION_SUMMARY.md
+CSV_OUTPUT_REFERENCE.md

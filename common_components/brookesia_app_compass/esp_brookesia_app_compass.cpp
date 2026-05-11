@@ -19,10 +19,9 @@
 #include <cstdio>
 #include "nvs_flash.h"
 #include "nvs.h"
-#include "ui/ui.h"
-#include "brookesia/system_core/gui/lvgl/lock.hpp"
 #include "esp_board_manager.h"
 #include <cstdint>
+#include "../../../main/soccer_data_sync.h"
 
 static const char *TAG = "CompassApp";
 
@@ -141,7 +140,6 @@ bool Compass::deinit()
 {
     ESP_LOGI(TAG, "Deinitializing Compass app");
 
-    destroyCompassUI();
     bmm_running_ = false;
     if (bmm_data_thread.joinable()) {
         bmm_data_thread.join();
@@ -168,8 +166,6 @@ bool Compass::run()
         is_app_running_ = true;
     }
 
-    createCompassUI();
-
     if (!is_initialized_) {
         return true;
     }
@@ -185,8 +181,44 @@ bool Compass::run()
 bool Compass::back()
 {
     ESP_LOGI(TAG, "Compass app back");
-    ESP_UTILS_CHECK_FALSE_RETURN(notifyCoreClosed(), false, "Notify core closed failed");
+    return close();
+}
+
+bool Compass::startSensorCollection()
+{
+    ESP_LOGI(TAG, "Starting sensor collection");
+    
+    if (!initSensors()) {
+        ESP_LOGE(TAG, "Failed to initialize sensors");
+        is_initialized_ = false;
+        is_app_running_ = false;
+        return false;
+    }
+    
+    is_initialized_ = true;
+    is_app_running_ = true;
+    
+    // Start sensor reading task
+    bmm_running_ = true;
+    bmm_data_thread = boost::thread(&Compass::bmmDataThread, this);
+    update_compass_thread = boost::thread(&Compass::updateCompassThread, this);
+    
+    ESP_LOGI(TAG, "Sensor collection started successfully");
     return true;
+}
+
+void Compass::stopSensorCollection()
+{
+    ESP_LOGI(TAG, "Stopping sensor collection");
+    bmm_running_ = false;
+    if (bmm_data_thread.joinable()) {
+        bmm_data_thread.join();
+    }
+    if (update_compass_thread.joinable()) {
+        update_compass_thread.join();
+    }
+    deinitSensors();
+    ESP_LOGI(TAG, "Sensor collection stopped");
 }
 
 bool Compass::resume()
@@ -197,14 +229,9 @@ bool Compass::resume()
         ESP_LOGE(TAG, "Failed to initialize sensors");
         is_initialized_ = false;
         is_app_running_ = false;
-        {
-            LvLockGuard gui_guard;
-            lv_disp_load_scr(ui_CompassTipScreen);
-        }
     } else {
         is_initialized_ = true;
         is_app_running_ = true;
-        // lv_disp_load_scr(ui_CompassScreen);
     }
 
     return true;
@@ -240,15 +267,11 @@ bool Compass::close()
 
 void Compass::createCompassUI()
 {
-    ESP_LOGI(TAG, "Creating compass UI");
-    compass_ui_init(is_initialized_);
-    ESP_LOGI(TAG, "Compass UI created successfully");
+    (void)is_initialized_;
 }
 
 void Compass::destroyCompassUI()
 {
-    compass_ui_destroy();
-    ESP_LOGI(TAG, "Compass UI destroyed");
 }
 
 bool Compass::initSensors()
@@ -612,47 +635,12 @@ void Compass::calibrateMagnetometer()
 
                 if (pitch_range < 90.0f) {
                     ESP_LOGI(TAG, "  → Rotate device forward/backward more");
-                    lv_async_call([](void *user_data) {
-                        Compass *self = static_cast<Compass *>(user_data);
-                        if (!self->bmm_running_) {
-                            return;
-                        }
-                        lv_label_set_text(
-                            ui_CorrectTips,
-                            "Calibrating...\nRotate device\nforward/backward more");
-                    }, this);
                 } else if (roll_range < 120.0f) {
                     ESP_LOGI(TAG, "  → Rotate device left/right more");
-                    lv_async_call([](void *user_data) {
-                        Compass *self = static_cast<Compass *>(user_data);
-                        if (!self->bmm_running_) {
-                            return;
-                        }
-                        lv_label_set_text(
-                            ui_CorrectTips,
-                            "Calibrating...\nRotate device\nleft/right more");
-                    }, this);
                 } else if (covered < 6) {
                     ESP_LOGI(TAG, "  → Move device in figure-8 pattern");
-                    lv_async_call([](void *user_data) {
-                        Compass *self = static_cast<Compass *>(user_data);
-                        if (!self->bmm_running_) {
-                            return;
-                        }
-                        lv_label_set_text(
-                            ui_CorrectTips,
-                            "Calibrating...\nMove device in\nfigure-8 pattern");
-                    }, this);
                 } else if (sample_count < 500) {
-                    lv_async_call([](void *user_data) {
-                        Compass *self = static_cast<Compass *>(user_data);
-                        if (!self->bmm_running_) {
-                            return;
-                        }
-                        lv_label_set_text(
-                            ui_CorrectTips,
-                            "Calibrating...\nKeep moving device\nin figure-8 pattern");
-                    }, this);
+                    ESP_LOGI(TAG, "  → Keep moving device in figure-8 pattern");
                 }
 
                 last_progress_time = now;
@@ -945,11 +933,23 @@ void Compass::updateSensorData()
         }
 
         current_heading_.store(final_heading, std::memory_order_relaxed);
-
-        /* print the raw and corrected data */
-        // ESP_LOGI(TAG, "Uncorrected Heading: %7.2f°-> Corrected Heading: %7.2f°, Difference: %7.2f°",
-        //      uncorrected_heading, corrected_heading, uncorrected_heading - corrected_heading);
     }
+
+    /* Sync accelerometer, gyroscope, and orientation data to global buffer */
+    if (rslt == BMI2_OK) {
+        g_soccer_sensor_data.acc[0] = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
+        g_soccer_sensor_data.acc[1] = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
+        g_soccer_sensor_data.acc[2] = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
+
+        g_soccer_sensor_data.gyro[0] = (float)sensor_data.gyr.x / 16.4f;
+        g_soccer_sensor_data.gyro[1] = -(float)sensor_data.gyr.y / 16.4f;
+        g_soccer_sensor_data.gyro[2] = -(float)sensor_data.gyr.z / 16.4f;
+    }
+
+    g_soccer_sensor_data.pitch = comp_filter.euler.pitch;
+    g_soccer_sensor_data.roll = comp_filter.euler.roll;
+    g_soccer_sensor_data.heading = current_heading_.load(std::memory_order_relaxed);
+    g_soccer_sensor_data.timestamp = (uint32_t)(esp_timer_get_time() / 1000);
 
 }
 
@@ -961,17 +961,7 @@ void Compass::bmmDataThread()
         // Perform magnetometer calibration
         ESP_LOGI(TAG, "Starting magnetometer calibration...");
         ESP_LOGI(TAG, "Please rotate the device slowly in ALL directions (figure-8 pattern)");
-
-        LvLockGuard gui_guard;
-
-        lv_disp_load_scr(ui_CompassCorrectScreen);
-        vTaskDelay(pdMS_TO_TICKS(2000)); // Give user time to prepare
         calibrateMagnetometer();
-    }
-
-    {
-        LvLockGuard gui_guard;
-        lv_disp_load_scr(ui_CompassScreen);
     }
 
     comp_filter.dt = SAMPLE_RATE_MS / 1000.0f; // 10ms = 0.01s
@@ -991,8 +981,6 @@ void Compass::bmmDataThread()
 
 void Compass::updateCompassDisplay()
 {
-    int16_t rotation = -(int16_t)(current_heading_.load(std::memory_order_relaxed) * 10);
-    lv_image_set_rotation(ui_Pointer, rotation);
 }
 
 void Compass::updateCompassThread()
@@ -1003,15 +991,6 @@ void Compass::updateCompassThread()
         if (!is_app_running_) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
-        }
-        if (bmm_running_) {
-            lv_async_call([](void *user_data) {
-                Compass *self = static_cast<Compass *>(user_data);
-                if (!self->bmm_running_) {
-                    return;
-                }
-                self->updateCompassDisplay();
-            }, this);
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }

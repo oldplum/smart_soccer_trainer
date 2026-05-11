@@ -5,8 +5,6 @@
  */
 #include "esp_brookesia_app_gesture_detect.hpp"
 #include "esp_log.h"
-#include "ui/ui.h"
-#include "ui/ui_app.h"
 #include "i2c_bus.h"
 #include "bmi270_api.h"
 #include "driver/gpio.h"
@@ -95,8 +93,6 @@ bool GestureDetect::run()
         return false;
     }
 
-    createGestureDetectUI();
-
     gesture_detect_thread_ = boost::thread(&GestureDetect::gestureDetectThread, this);
     gesture_detect_event_thread_ = boost::thread(&GestureDetect::gestureDetectEventThread, this);
 
@@ -141,12 +137,11 @@ bool GestureDetect::resume()
 
 void GestureDetect::createGestureDetectUI()
 {
-    gesture_detect_ui_init(is_initialized_);
+    (void)is_initialized_;
 }
 
 void GestureDetect::destroyGestureDetectUI()
 {
-    gesture_detect_ui_destroy();
 }
 
 int8_t GestureDetect::set_accel_gyro_config(bmi270_handle_t bmi2_dev)
@@ -344,22 +339,7 @@ void GestureDetect::gestureDetectThread()
                 pending_gesture_ = GESTURE_PUTDOWN;
             } else if (gesture_type == GESTURE_DETECT_EVENT_ROLL) {
                 pending_gesture_ = GESTURE_ROLL;
-            } else {
-                continue;
             }
-
-            lv_async_call([](void *user_data) {
-                GestureDetect *self = static_cast<GestureDetect *>(user_data);
-                if (self->pending_gesture_ != GESTURE_NONE) {
-                    update_gesture_ui(self->pending_gesture_);
-                    if (self->pending_gesture_ == GESTURE_ROLL ||
-                            self->pending_gesture_ == GESTURE_SHAKE) {
-                        update_gesture_detail(self->gesture_detail_text_);
-                    } else {
-                        update_gesture_detail("");
-                    }
-                }
-            }, this);
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
