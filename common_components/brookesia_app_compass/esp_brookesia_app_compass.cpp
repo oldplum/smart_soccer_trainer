@@ -823,19 +823,9 @@ void Compass::apply_tilt_compensation(float mag_x, float mag_y, float mag_z, flo
 void Compass::updateSensorData()
 {
     struct bmi2_sens_data sensor_data = {0};
-    static int64_t last_acc_log_us = 0;
     /* Read BMI270 accelerometer and gyroscope data */
     int8_t rslt = bmi2_get_sensor_data(&sensor_data, bmi2_dev_);
     if (rslt == BMI2_OK) {
-        int64_t now_us = esp_timer_get_time();
-        if ((last_acc_log_us == 0) || (now_us - last_acc_log_us >= ACC_LOG_INTERVAL_US)) {
-            float float_x = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
-            float float_y = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
-            float float_z = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
-            printf("ACC:%.2f,%.2f,%.2f\n", float_x, float_y, float_z);
-            last_acc_log_us = now_us;
-        }
-
         /* Parse accelerometer data */
         float acc_x_mg = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
         float acc_y_mg = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
