@@ -187,16 +187,19 @@ bool Compass::back()
 bool Compass::startSensorCollection()
 {
     ESP_LOGI(TAG, "Starting sensor collection");
+    sensor_online_ = false;
     
     if (!initSensors()) {
         ESP_LOGE(TAG, "Failed to initialize sensors");
         is_initialized_ = false;
         is_app_running_ = false;
+        sensor_online_ = false;
         return false;
     }
     
     is_initialized_ = true;
     is_app_running_ = true;
+    sensor_online_ = true;
     
     // Start sensor reading task
     bmm_running_ = true;
@@ -210,6 +213,7 @@ bool Compass::startSensorCollection()
 void Compass::stopSensorCollection()
 {
     ESP_LOGI(TAG, "Stopping sensor collection");
+    sensor_online_ = false;
     bmm_running_ = false;
     if (bmm_data_thread.joinable()) {
         bmm_data_thread.join();
@@ -255,6 +259,7 @@ bool Compass::pause()
 bool Compass::close()
 {
     ESP_LOGI(TAG, "Closing Compass app");
+    sensor_online_ = false;
     bmm_running_ = false;
     if (bmm_data_thread.joinable()) {
         bmm_data_thread.join();
@@ -272,6 +277,11 @@ void Compass::createCompassUI()
 
 void Compass::destroyCompassUI()
 {
+}
+
+bool Compass::isSensorOnline() const
+{
+    return sensor_online_.load(std::memory_order_relaxed);
 }
 
 bool Compass::initSensors()
@@ -820,11 +830,12 @@ void Compass::apply_tilt_compensation(float mag_x, float mag_y, float mag_z, flo
                        mag_z * cos_roll * cos_pitch;
 }
 
-void Compass::updateSensorData()
+bool Compass::updateSensorData()
 {
     struct bmi2_sens_data sensor_data = {0};
     /* Read BMI270 accelerometer and gyroscope data */
     int8_t rslt = bmi2_get_sensor_data(&sensor_data, bmi2_dev_);
+    bool motion_ok = (rslt == BMI2_OK);
     if (rslt == BMI2_OK) {
         /* Parse accelerometer data */
         float acc_x_mg = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
@@ -842,11 +853,14 @@ void Compass::updateSensorData()
                                     comp_filter.dt);
     } else {
         ESP_LOGE(TAG, "BMI270 get sensor data failed: %d", rslt);
+        sensor_online_ = false;
+        return false;
     }
 
     struct bmm350_mag_temp_data mag_data = {0};
     /* Read BMM350 magnetometer data */
     int8_t mag_rslt = bmm350_get_compensated_mag_xyz_temp_data(&mag_data, &s_bmm350);
+    bool mag_ok = (mag_rslt == BMM350_OK);
     if (mag_rslt == BMM350_OK) {
         float mag_raw[3] = {(float)mag_data.x, (float)mag_data.y, (float)mag_data.z};
         float mag_calibrated[3];
@@ -925,8 +939,16 @@ void Compass::updateSensorData()
         current_heading_.store(final_heading, std::memory_order_relaxed);
     }
 
+    if (!mag_ok) {
+        ESP_LOGE(TAG, "BMM350 get sensor data failed: %d", mag_rslt);
+        sensor_online_ = false;
+        return false;
+    }
+
+    sensor_online_ = (motion_ok && mag_ok);
+
     /* Sync accelerometer, gyroscope, and orientation data to global buffer */
-    if (rslt == BMI2_OK) {
+    if (motion_ok) {
         g_soccer_sensor_data.acc[0] = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
         g_soccer_sensor_data.acc[1] = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
         g_soccer_sensor_data.acc[2] = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
@@ -939,7 +961,11 @@ void Compass::updateSensorData()
     g_soccer_sensor_data.pitch = comp_filter.euler.pitch;
     g_soccer_sensor_data.roll = comp_filter.euler.roll;
     g_soccer_sensor_data.heading = current_heading_.load(std::memory_order_relaxed);
-    g_soccer_sensor_data.timestamp = (uint32_t)(esp_timer_get_time() / 1000);
+    if (sensor_online_.load(std::memory_order_relaxed)) {
+        g_soccer_sensor_data.timestamp = (uint32_t)(esp_timer_get_time() / 1000);
+    }
+
+    return true;
 
 }
 
@@ -962,7 +988,22 @@ void Compass::bmmDataThread()
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-        updateSensorData();
+
+        if (!sensor_online_.load(std::memory_order_relaxed)) {
+            if (!initSensors()) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+            sensor_online_ = true;
+        }
+
+        if (!updateSensorData()) {
+            deinitSensors();
+            sensor_online_ = false;
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(SAMPLE_RATE_MS));
     }
 

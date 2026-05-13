@@ -36,8 +36,6 @@ static uint32_t last_env_print_ms = 0;
 /* Last printed timestamps to avoid duplicate prints when data hasn't changed */
 static uint32_t last_printed_motion_ts = UINT32_MAX;
 static uint32_t last_printed_env_ts = UINT32_MAX;
-static bool motion_sensor_available = false;
-static bool env_sensor_available = false;
 
 /**
  * @brief Debug serial output task
@@ -54,9 +52,11 @@ void debug_serial_task(void *arg)
 
     while (1) {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000) - start_time_ms;
+        auto temp_app = esp_brookesia::apps::Temperature::requestInstance();
+        auto compass_app = esp_brookesia::apps::Compass::requestInstance();
 
         /* Output motion data every 10ms, but only if timestamp changed */
-        if (motion_sensor_available &&
+        if (compass_app && compass_app->isSensorOnline() &&
             (now_ms - last_motion_print_ms) >= DEBUG_SERIAL_PERIOD_MOTION_MS) {
             uint32_t curr_ts = g_soccer_sensor_data.timestamp;
             if (curr_ts != last_printed_motion_ts) {
@@ -77,7 +77,7 @@ void debug_serial_task(void *arg)
         }
 
         /* Output environmental data every 3 seconds, but only if timestamp changed */
-        if (env_sensor_available &&
+        if (temp_app && temp_app->isSensorOnline() &&
             (now_ms - last_env_print_ms) >= DEBUG_SERIAL_PERIOD_ENV_MS) {
             uint32_t curr_ts = g_soccer_sensor_data.timestamp;
             if (curr_ts != last_printed_env_ts) {
@@ -149,8 +149,7 @@ extern "C" void app_main(void)
     auto temp_app = esp_brookesia::apps::Temperature::requestInstance();
     if (temp_app) {
         ESP_LOGI("main", "Starting Temperature sensor collection");
-        env_sensor_available = temp_app->startSensorCollection();
-        if (!env_sensor_available) {
+        if (!temp_app->startSensorCollection()) {
             ESP_LOGW("main", "Failed to start Temperature sensor collection");
         }
     }
@@ -158,8 +157,7 @@ extern "C" void app_main(void)
     auto compass_app = esp_brookesia::apps::Compass::requestInstance();
     if (compass_app) {
         ESP_LOGI("main", "Starting Compass sensor collection");
-        motion_sensor_available = compass_app->startSensorCollection();
-        if (!motion_sensor_available) {
+        if (!compass_app->startSensorCollection()) {
             ESP_LOGW("main", "Failed to start Compass sensor collection");
         }
     }

@@ -145,20 +145,24 @@ bool Temperature::back()
 bool Temperature::startSensorCollection()
 {
     ESP_LOGI(TAG, "Starting sensor collection");
+    sensor_online_ = false;
     
     if (!initSensors()) {
         ESP_LOGE(TAG, "Failed to initialize sensors");
         is_initialized_ = false;
+        sensor_online_ = false;
         return false;
     }
     
     if (init_bsec() != BSEC_OK) {
         ESP_LOGE(TAG, "Failed to initialize BSEC");
         is_initialized_ = false;
+        sensor_online_ = false;
         return false;
     }
     
     is_initialized_ = true;
+    sensor_online_ = true;
     _bme_running = true;
     boost::thread::attributes thread_attrs;
     thread_attrs.set_stack_size(4 * 1024);
@@ -171,6 +175,7 @@ bool Temperature::startSensorCollection()
 void Temperature::stopSensorCollection()
 {
     ESP_LOGI(TAG, "Stopping sensor collection");
+    sensor_online_ = false;
     _bme_running = false;
     if (_bme_thread.joinable()) {
         _bme_thread.join();
@@ -181,6 +186,7 @@ void Temperature::stopSensorCollection()
 bool Temperature::close()
 {
     ESP_LOGI(TAG, "Closing Temperature app");
+    sensor_online_ = false;
     _bme_running = false;
     if (_bme_thread.joinable()) {
         _bme_thread.join();
@@ -197,6 +203,11 @@ void Temperature::createTemperatureUI()
 
 void Temperature::destroyTemperatureUI()
 {
+}
+
+bool Temperature::isSensorOnline() const
+{
+    return sensor_online_.load(std::memory_order_relaxed);
 }
 
 esp_err_t Temperature::init_hardware()
@@ -427,11 +438,22 @@ void Temperature::bmeDataThread()
     time_stamp_last_state_save = get_timestamp_us();
 
     while (_bme_running) {
+        if (!sensor_online_.load(std::memory_order_relaxed)) {
+            if (!initSensors() || init_bsec() != BSEC_OK) {
+                sensor_online_ = false;
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+            sensor_online_ = true;
+        }
+
         int64_t curr_time_ns = get_timestamp_us() * 1000;
 
         bsec_status = bsec_sensor_control(curr_time_ns, &sensor_settings);
         if (bsec_status != BSEC_OK) {
             ESP_LOGW(TAG, "BSEC sensor control failed: %d", bsec_status);
+            sensor_online_ = false;
+            deinitSensors();
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -448,6 +470,8 @@ void Temperature::bmeDataThread()
             bme_rslt = bme69x_set_conf(&conf, &bme_);
             if (bme_rslt != BME69X_OK) {
                 ESP_LOGE(TAG, "bme69x_set_conf failed: %d", bme_rslt);
+                sensor_online_ = false;
+                deinitSensors();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
@@ -460,6 +484,8 @@ void Temperature::bmeDataThread()
             bme_rslt = bme69x_set_heatr_conf(BME69X_FORCED_MODE, &heatr_conf, &bme_);
             if (bme_rslt != BME69X_OK) {
                 ESP_LOGE(TAG, "bme68x_set_heatr_conf failed: %d", bme_rslt);
+                sensor_online_ = false;
+                deinitSensors();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
@@ -467,6 +493,8 @@ void Temperature::bmeDataThread()
             bme_rslt = bme69x_set_op_mode(BME69X_FORCED_MODE, &bme_);
             if (bme_rslt != BME69X_OK) {
                 ESP_LOGE(TAG, "bme69x_set_op_mode failed: %d", bme_rslt);
+                sensor_online_ = false;
+                deinitSensors();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
@@ -477,12 +505,16 @@ void Temperature::bmeDataThread()
             bme_rslt = bme69x_get_data(BME69X_FORCED_MODE, &data, &n_data, &bme_);
             if (bme_rslt != BME69X_OK || n_data == 0) {
                 ESP_LOGW(TAG, "bme68x_get_data failed or no data: %d, n_data: %d", bme_rslt, n_data);
+                sensor_online_ = false;
+                deinitSensors();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
 
             if (!(data.status & BME69X_GASM_VALID_MSK)) {
                 ESP_LOGW(TAG, "Gas measurement not valid, skipping");
+                sensor_online_ = false;
+                deinitSensors();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
@@ -529,6 +561,10 @@ void Temperature::bmeDataThread()
 
             if (bsec_status != BSEC_OK) {
                 ESP_LOGW(TAG, "bsec_do_steps failed: %d", bsec_status);
+                sensor_online_ = false;
+                deinitSensors();
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
             } else if (n_bsec_outputs > 0) {
                 float iaq = 0, static_iaq = 0, co2_eq = 0, breath_voc = 0;
                 float temperature = 0, humidity = 0, pressure = 0;
@@ -574,6 +610,7 @@ void Temperature::bmeDataThread()
                 output_ready(time_stamp_ns / 1000, iaq, iaq_acc, temperature, humidity,
                              pressure, raw_temp, raw_hum, gas, bsec_status,
                              static_iaq, co2_eq, breath_voc);
+                sensor_online_ = true;
 
                 /* Sync environment data to global buffer */
                 g_soccer_sensor_data.temp = this->bsec_temperature;

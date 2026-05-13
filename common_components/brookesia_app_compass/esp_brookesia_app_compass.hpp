@@ -56,6 +56,7 @@ public:
     /* Public methods for direct sensor control */
     bool startSensorCollection();
     void stopSensorCollection();
+    bool isSensorOnline() const;
 
     // NVS storage methods
     bool saveCalibrationToNVS();
@@ -97,7 +98,7 @@ private:
     void apply_tilt_compensation(float mag_x, float mag_y, float mag_z, float pitch,
                                  float roll, float *mag_x_corrected,
                                  float *mag_y_corrected, float *mag_z_corrected);
-    void updateSensorData();
+    bool updateSensorData();
     void bmmDataThread();
     void updateCompassDisplay();
     void updateCompassThread();
@@ -107,6 +108,7 @@ private:
 
     bool is_initialized_ = false;
     bool is_app_running_ = false;
+    std::atomic<bool> sensor_online_{false};
     // BMM350 sensor handles
     bmi270_handle_t bmi_handle_;
     i2c_bus_handle_t i2c_bus_;

@@ -35,6 +35,7 @@ public:
     /* Public methods for direct sensor control */
     bool startSensorCollection();
     void stopSensorCollection();
+    bool isSensorOnline() const;
 
 protected:
     bool run() override;
@@ -67,6 +68,7 @@ private:
     float bsec_humidity = 0.0f;
     float bsec_pressure = 0.0f;
     float previous_pressure = 0.0f;  // For pressure trend detection
+    std::atomic<bool> sensor_online_{false};
 
     // Humidity sliding average (last 5 values)
     static constexpr int HUMIDITY_AVG_COUNT = 5;
