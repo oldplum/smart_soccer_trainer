@@ -21,3 +21,7 @@ dependencies:
     public: true
     version: ^2
   
+  espressif/esp-lib-utils:
+    path: "../common_components/espressif__esp-lib-utils"
+    public: true
+
