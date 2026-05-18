@@ -43,6 +43,26 @@ typedef struct {
 
     /* System Data */
     uint32_t timestamp;   /**< Timestamp in milliseconds since boot */
+
+    /* Placeholder / Reserved Data (reserved for higher-level features)
+     * - Action counters (to be computed by shot/pass detection model)
+     * - Vitals (heart rate)
+     * - UWB distance channels
+     * These are populated with fixed default values so the rest of the
+     * system can read a stable interface while algorithms / hardware
+     * are still under development.
+     */
+    uint32_t shoot_count; /**< Placeholder: number of detected shots (default 0) */
+    uint32_t pass_count;  /**< Placeholder: number of detected passes (default 0) */
+
+    /* Heart rate (beats per minute) */
+    uint16_t heart_rate;  /**< Placeholder heart rate (default 80 bpm) */
+
+    /* UWB distance channels (meters) */
+    float uwb_d0;
+    float uwb_d1;
+    float uwb_d2;
+    float uwb_d3;
 } __attribute__((packed)) SoccerSensorData;
 
 /**
@@ -65,6 +85,15 @@ extern SoccerSensorData g_soccer_sensor_data;
 static inline void soccer_data_init(SoccerSensorData *data)
 {
     std::memset(data, 0, sizeof(SoccerSensorData));
+
+    /* Set sensible defaults for reserved placeholder fields */
+    data->shoot_count = 0;
+    data->pass_count = 0;
+    data->heart_rate = 80;
+    data->uwb_d0 = 10.0f;
+    data->uwb_d1 = 20.0f;
+    data->uwb_d2 = 30.0f;
+    data->uwb_d3 = 40.0f;
 }
 
 #ifdef __cplusplus
