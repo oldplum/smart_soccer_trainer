@@ -8,8 +8,6 @@
 #include "bme69x_defs.h"
 #include "bsec_datatypes.h"
 #include "bsec_interface.h"
-#include "nvs_flash.h"
-#include "nvs.h"
 #include "common.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -17,6 +15,8 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "soccer_data_sync.h"
@@ -36,6 +36,7 @@ static i2c_master_bus_handle_t s_i2c_bus = nullptr;
 static struct bme69x_dev s_bme = {};
 static std::atomic<bool> s_running{false};
 static std::atomic<bool> s_sensor_online{false};
+static std::atomic<bool> s_hardware_init_failed{false};
 static uint8_t s_bsec_state[BSEC_MAX_STATE_BLOB_SIZE] = {};
 static uint32_t s_bsec_state_len = 0;
 static bool s_bsec_state_valid = false;
@@ -75,100 +76,63 @@ static void save_bsec_state()
                                                         work_buffer,
                                                         BSEC_MAX_WORKBUFFER_SIZE,
                                                         &n_state);
+    std::free(work_buffer);
+    
     if (bsec_status == BSEC_OK && n_state > 0 && n_state <= sizeof(s_bsec_state)) {
         s_bsec_state_len = n_state;
         s_bsec_state_valid = true;
+        
+        nvs_handle_t nvs_handle;
+        esp_err_t err = nvs_open("env_sensor", NVS_READWRITE, &nvs_handle);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
+            return;
+        }
+        
+        err = nvs_set_blob(nvs_handle, "bsec_state", s_bsec_state, s_bsec_state_len);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to save BSEC state: %s", esp_err_to_name(err));
+            nvs_close(nvs_handle);
+            return;
+        }
+        
+        err = nvs_commit(nvs_handle);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to commit NVS: %s", esp_err_to_name(err));
+        }
+        
+        nvs_close(nvs_handle);
     } else {
         ESP_LOGW(TAG, "bsec_get_state failed: %d", bsec_status);
-        std::free(work_buffer);
-        return;
     }
-
-    /* Persist into NVS. Non-fatal: log warnings on errors. */
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open("bsec", NVS_READWRITE, &nvs_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        std::free(work_buffer);
-        return;
-    }
-
-    err = nvs_set_blob(nvs_handle, "state", s_bsec_state, s_bsec_state_len);
-    if (err != ESP_OK) {
-        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NOT_ENOUGH_SPACE) {
-            ESP_LOGW(TAG, "nvs_set_blob failed - no space: %s", esp_err_to_name(err));
-        } else {
-            ESP_LOGW(TAG, "nvs_set_blob failed: %s", esp_err_to_name(err));
-        }
-        nvs_close(nvs_handle);
-        std::free(work_buffer);
-        return;
-    }
-
-    err = nvs_commit(nvs_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
-    }
-
-    nvs_close(nvs_handle);
-    std::free(work_buffer);
 }
 
 static void restore_bsec_state()
 {
-    /* Try to read persisted state from NVS first. If not found, and
-       in-memory state is invalid, do nothing. NVS errors are non-fatal. */
     nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open("bsec", NVS_READONLY, &nvs_handle);
+    esp_err_t err = nvs_open("env_sensor", NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        /* If NVS not available, fall back to any in-memory state (if present). */
-        if (!s_bsec_state_valid || s_bsec_state_len == 0) {
-            return;
-        }
-    } else {
-        size_t required_size = sizeof(s_bsec_state);
-        err = nvs_get_blob(nvs_handle, "state", NULL, &required_size);
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGI(TAG, "No saved BSEC state in NVS");
-            nvs_close(nvs_handle);
-            if (!s_bsec_state_valid || s_bsec_state_len == 0) {
-                return;
-            }
-        } else if (err != ESP_OK) {
-            ESP_LOGW(TAG, "nvs_get_blob size query failed: %s", esp_err_to_name(err));
-            nvs_close(nvs_handle);
-            if (!s_bsec_state_valid || s_bsec_state_len == 0) {
-                return;
-            }
-        } else {
-            if (required_size > sizeof(s_bsec_state)) {
-                ESP_LOGW(TAG, "Saved BSEC state too large (%u bytes)", static_cast<unsigned int>(required_size));
-                nvs_close(nvs_handle);
-                if (!s_bsec_state_valid || s_bsec_state_len == 0) {
-                    return;
-                }
-            } else {
-                err = nvs_get_blob(nvs_handle, "state", s_bsec_state, &required_size);
-                if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "nvs_get_blob read failed: %s", esp_err_to_name(err));
-                    nvs_close(nvs_handle);
-                    if (!s_bsec_state_valid || s_bsec_state_len == 0) {
-                        return;
-                    }
-                } else {
-                    s_bsec_state_len = static_cast<uint32_t>(required_size);
-                    s_bsec_state_valid = true;
-                    nvs_close(nvs_handle);
-                }
-            }
-        }
-    }
-
-    if (!s_bsec_state_valid || s_bsec_state_len == 0) {
+        ESP_LOGW(TAG, "Failed to open NVS for reading: %s", esp_err_to_name(err));
         return;
     }
-
+    
+    size_t required_size = sizeof(s_bsec_state);
+    err = nvs_get_blob(nvs_handle, "bsec_state", s_bsec_state, &required_size);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read BSEC state from NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return;
+    }
+    nvs_close(nvs_handle);
+    
+    if (required_size == 0 || required_size > sizeof(s_bsec_state)) {
+        ESP_LOGW(TAG, "Invalid BSEC state size from NVS: %lu", static_cast<unsigned long>(required_size));
+        return;
+    }
+    
+    s_bsec_state_len = required_size;
+    s_bsec_state_valid = true;
+    
     uint8_t *work_buffer = static_cast<uint8_t *>(std::malloc(BSEC_MAX_WORKBUFFER_SIZE));
     if (work_buffer == nullptr) {
         ESP_LOGW(TAG, "restore_bsec_state: malloc failed");
@@ -179,18 +143,23 @@ static void restore_bsec_state()
                                                        s_bsec_state_len,
                                                        work_buffer,
                                                        BSEC_MAX_WORKBUFFER_SIZE);
+    std::free(work_buffer);
+    
     if (bsec_status != BSEC_OK) {
         ESP_LOGW(TAG, "bsec_set_state failed: %d", bsec_status);
     } else {
-        ESP_LOGI(TAG, "Restored BSEC state blob (%lu bytes)", static_cast<unsigned long>(s_bsec_state_len));
+        ESP_LOGI(TAG, "Restored BSEC state blob (%lu bytes) from NVS", static_cast<unsigned long>(s_bsec_state_len));
     }
-
-    std::free(work_buffer);
 }
 
 static bool init_hardware()
 {
     esp_err_t ret;
+
+    if (s_i2c_bus != nullptr) {
+        bme69x_set_i2c_bus_handle(s_i2c_bus);
+        return true;
+    }
 
     gpio_config_t sdo_conf = {
         .pin_bit_mask = (1ULL << kBme690SdoPin),
@@ -218,7 +187,8 @@ static bool init_hardware()
     };
     ret = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_new_master_bus failed: %s", esp_err_to_name(ret));
+        ESP_LOGW(TAG, "i2c_new_master_bus failed (sensor may be disconnected): %s", esp_err_to_name(ret));
+        s_hardware_init_failed = true;
         return false;
     }
 
@@ -337,6 +307,16 @@ static void environment_sensor_task(void *)
 {
     while (s_running.load(std::memory_order_relaxed)) {
         if (!s_sensor_online.load(std::memory_order_relaxed)) {
+            if (s_hardware_init_failed.load(std::memory_order_relaxed)) {
+                update_global_environment(g_soccer_sensor_data.temp,
+                                           g_soccer_sensor_data.humidity,
+                                           g_soccer_sensor_data.pressure,
+                                           g_soccer_sensor_data.iaq,
+                                           false);
+                vTaskDelay(kRetryDelay);
+                continue;
+            }
+            
             if (!init_sensor_stack()) {
                 update_global_environment(g_soccer_sensor_data.temp,
                                            g_soccer_sensor_data.humidity,

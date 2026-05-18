@@ -7,6 +7,7 @@
 #include <cstdio>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #ifdef ESP_UTILS_LOG_TAG
@@ -100,6 +101,21 @@ static void raw_imu_sampling_task(void *arg)
 extern "C" void app_main(void)
 {
     ESP_LOGI("Main", "Sensor data collection demo");
+
+    /* Initialize NVS (Non-Volatile Storage) for BSEC state persistence */
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW("Main", "NVS full or format change; erasing and reinitializing");
+        err = nvs_flash_erase();
+        if (err != ESP_OK) {
+            ESP_LOGE("Main", "Failed to erase NVS: %s", esp_err_to_name(err));
+        } else {
+            err = nvs_flash_init();
+        }
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW("Main", "NVS initialization failed: %s (some features may not work)", esp_err_to_name(err));
+    }
 
     /* Initialize sensor data buffer */
     soccer_data_init(&g_soccer_sensor_data);
