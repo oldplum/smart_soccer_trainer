@@ -29,7 +29,6 @@ bool wifi_data_sender_init(const char *server_ip, uint16_t server_port);
  * @param gyro Gyroscope data [x, y, z] in °/s
  * @param pitch Pitch angle in degrees
  * @param roll Roll angle in degrees
- * @param heading Compass heading in degrees
  * @return true if sent successfully, false otherwise
  */
 bool wifi_data_sender_send_motion_data(
@@ -37,8 +36,7 @@ bool wifi_data_sender_send_motion_data(
     const float acc[3],
     const float gyro[3],
     float pitch,
-    float roll,
-    float heading
+    float roll
 );
 
 /**

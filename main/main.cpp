@@ -143,8 +143,7 @@ void wifi_data_send_task(void *arg)
                     acc_copy,
                     gyro_copy,
                     g_soccer_sensor_data.pitch,
-                    g_soccer_sensor_data.roll,
-                    g_soccer_sensor_data.heading
+                    g_soccer_sensor_data.roll
                 );
                 last_sent_ts = curr_ts;
             }
