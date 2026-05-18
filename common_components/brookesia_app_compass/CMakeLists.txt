@@ -13,11 +13,13 @@ idf_component_register(
         ${PROJ_SRC}
         ${PROJ_SRC}/BMM350_SensorAPI
         ${PROJ_SRC}/BMM350_SensorAPI/examples/common
+        ../../main
     WHOLE_ARCHIVE
     REQUIRES espressif__esp-boost
     REQUIRES espressif__i2c_bus
     REQUIRES nvs_flash
     REQUIRES espressif__esp_board_manager
+    REQUIRES bmi270_collector
 )
 
 set_source_files_properties(

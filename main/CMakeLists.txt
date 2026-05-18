@@ -1,8 +1,8 @@
 idf_component_register(
     SRC_DIRS "."
-    INCLUDE_DIRS ".")
-
-set(EXTRA_COMPONENT_DIRS "../common_components")
+    INCLUDE_DIRS "."
+    REQUIRES bmi270_collector brookesia_app_compass brookesia_app_temperature esp_board_manager
+             esp_wifi esp_netif esp_event nvs_flash esp_timer)
 
 target_compile_options(${COMPONENT_LIB} INTERFACE -Wno-missing-field-initializers)
 

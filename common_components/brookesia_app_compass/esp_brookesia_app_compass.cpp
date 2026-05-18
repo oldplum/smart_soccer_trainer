@@ -21,7 +21,8 @@
 #include "nvs.h"
 #include "esp_board_manager.h"
 #include <cstdint>
-#include "../../../main/soccer_data_sync.h"
+#include "soccer_data_sync.h"
+#include "bmi270_collector.h"
 
 static const char *TAG = "CompassApp";
 
@@ -327,63 +328,74 @@ bool Compass::initSensors()
         .clk_flags = 0,
     };
 
-    i2c_bus_ = i2c_bus_create(I2C_NUM_0, &i2c_conf);
-    if (!i2c_bus_) {
-        ESP_LOGE(TAG, "I2C bus create failed");
-        return false;
-    }
-    ESP_LOGI(TAG, "I2C bus handle: %p", i2c_bus_);
-
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-
-    ret = bmi270_sensor_create(i2c_bus_, &bmi_handle_, bmi270_config_file, BMI2_GYRO_CROSS_SENS_ENABLE | BMI2_CRT_RTOSK_ENABLE);
-    if (ret != ESP_OK || bmi_handle_ == NULL) {
-        ESP_LOGE(TAG, "BMI270 creation failed");
-    }
-
-    bmi2_dev_ = (struct bmi2_dev *)bmi_handle_;
-    ESP_LOGI(TAG, "BMI270 initialized successfully");
-
-    struct bmi2_sens_config config[2];
-    config[BMI2_ACCEL].type = BMI2_ACCEL;
-    config[BMI2_GYRO].type = BMI2_GYRO;
-
-    int8_t rslt = bmi2_get_sensor_config(config, 2, bmi2_dev_);
-    if (rslt == BMI2_OK) {
-        // Configure accelerometer
-        config[BMI2_ACCEL].cfg.acc.odr = BMI2_ACC_ODR_100HZ;        // 100Hz sample rate
-        config[BMI2_ACCEL].cfg.acc.range = BMI2_ACC_RANGE_16G;       // ±16G range
-        config[BMI2_ACCEL].cfg.acc.bwp = BMI2_ACC_NORMAL_AVG4;        // Normal averaging
-        config[BMI2_ACCEL].cfg.acc.filter_perf = BMI2_PERF_OPT_MODE; // Filter performance
-
-        // Configure gyroscope
-        config[BMI2_GYRO].cfg.gyr.odr = BMI2_GYR_ODR_100HZ;          // 100Hz sample rate
-        config[BMI2_GYRO].cfg.gyr.range = BMI2_GYR_RANGE_2000;       // ±2000dps range
-        config[BMI2_GYRO].cfg.gyr.bwp = BMI2_GYR_NORMAL_MODE;       // Normal filter
-        config[BMI2_GYRO].cfg.gyr.noise_perf = BMI2_POWER_OPT_MODE;  // Noise performance
-        config[BMI2_GYRO].cfg.gyr.filter_perf = BMI2_PERF_OPT_MODE; // Filter performance
-
-        rslt = bmi270_set_sensor_config(config, 2, bmi2_dev_);
-        if (rslt != BMI2_OK) {
-            ESP_LOGE(TAG, "BMI270 sensor config failed: %d", rslt);
+    if (bmi270_collector_is_active()) {
+        i2c_bus_ = bmi270_collector_get_i2c_bus();
+        bmi_handle_ = NULL;
+        bmi2_dev_ = NULL;
+        ESP_LOGI(TAG, "Using shared I2C bus from BMI270 collector");
+    } else {
+        i2c_bus_ = i2c_bus_create(I2C_NUM_0, &i2c_conf);
+        if (!i2c_bus_) {
+            ESP_LOGE(TAG, "I2C bus create failed");
             return false;
         }
-    } else {
-        ESP_LOGW(TAG, "BMI270 get sensor config failed: %d", rslt);
-    }
+        ESP_LOGI(TAG, "I2C bus handle: %p", i2c_bus_);
 
-    uint8_t sens_list[2] = {BMI2_ACCEL, BMI2_GYRO};
-    rslt = bmi2_sensor_enable(sens_list, 2, bmi2_dev_);
-    if (rslt != BMI2_OK) {
-        ESP_LOGE(TAG, "BMI270 sensor enable failed: %d", rslt);
-        return false;
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+
+        ret = bmi270_sensor_create(i2c_bus_, &bmi_handle_, bmi270_config_file, BMI2_GYRO_CROSS_SENS_ENABLE | BMI2_CRT_RTOSK_ENABLE);
+        if (ret != ESP_OK || bmi_handle_ == NULL) {
+            ESP_LOGE(TAG, "BMI270 creation failed");
+        }
+
+        bmi2_dev_ = (struct bmi2_dev *)bmi_handle_;
+        ESP_LOGI(TAG, "BMI270 initialized successfully");
+
+        struct bmi2_sens_config config[2];
+        config[BMI2_ACCEL].type = BMI2_ACCEL;
+        config[BMI2_GYRO].type = BMI2_GYRO;
+
+        int8_t rslt = bmi2_get_sensor_config(config, 2, bmi2_dev_);
+        if (rslt == BMI2_OK) {
+            config[BMI2_ACCEL].cfg.acc.odr = BMI2_ACC_ODR_100HZ;
+            config[BMI2_ACCEL].cfg.acc.range = BMI2_ACC_RANGE_16G;
+            config[BMI2_ACCEL].cfg.acc.bwp = BMI2_ACC_NORMAL_AVG4;
+            config[BMI2_ACCEL].cfg.acc.filter_perf = BMI2_PERF_OPT_MODE;
+
+            config[BMI2_GYRO].cfg.gyr.odr = BMI2_GYR_ODR_100HZ;
+            config[BMI2_GYRO].cfg.gyr.range = BMI2_GYR_RANGE_2000;
+            config[BMI2_GYRO].cfg.gyr.bwp = BMI2_GYR_NORMAL_MODE;
+            config[BMI2_GYRO].cfg.gyr.noise_perf = BMI2_POWER_OPT_MODE;
+            config[BMI2_GYRO].cfg.gyr.filter_perf = BMI2_PERF_OPT_MODE;
+
+            rslt = bmi270_set_sensor_config(config, 2, bmi2_dev_);
+            if (rslt != BMI2_OK) {
+                ESP_LOGE(TAG, "BMI270 sensor config failed: %d", rslt);
+                return false;
+            }
+        } else {
+            ESP_LOGW(TAG, "BMI270 get sensor config failed: %d", rslt);
+        }
+
+        uint8_t sens_list[2] = {BMI2_ACCEL, BMI2_GYRO};
+        rslt = bmi2_sensor_enable(sens_list, 2, bmi2_dev_);
+        if (rslt != BMI2_OK) {
+            ESP_LOGE(TAG, "BMI270 sensor enable failed: %d", rslt);
+            return false;
+        }
+        ESP_LOGI(TAG, "BMI270 sensors enabled");
     }
-    ESP_LOGI(TAG, "BMI270 sensors enabled");
 
     static uint8_t s_bmm350_addr = 0x14;
 
+    if (bmi270_collector_is_active()) {
+        bmi270_collector_i2c_lock();
+    }
     if (bmm350_interface_init(&s_bmm350, i2c_bus_) != BMM350_OK) {
         ESP_LOGE(TAG, "BMM350 interface init failed");
+        if (bmi270_collector_is_active()) {
+            bmi270_collector_i2c_unlock();
+        }
         return false;
     }
 
@@ -431,10 +443,16 @@ bool Compass::initSensors()
             (void)bmm350_enable_axes(BMM350_X_EN, BMM350_Y_EN, BMM350_Z_EN, &s_bmm350);
             (void)bmm350_set_powermode(BMM350_NORMAL_MODE, &s_bmm350);
             ESP_LOGI(TAG, "BMM350 configured successfully");
+            if (bmi270_collector_is_active()) {
+                bmi270_collector_i2c_unlock();
+            }
             return true;
         }
     }
 
+    if (bmi270_collector_is_active()) {
+        bmi270_collector_i2c_unlock();
+    }
     return true;
 }
 
@@ -442,9 +460,10 @@ bool Compass::deinitSensors()
 {
     ESP_LOGI(TAG, "Deinitializing sensors...");
 
-    if (bmi_handle_) {
+    if (bmi_handle_ && !bmi270_collector_is_active()) {
         bmi270_sensor_del(&bmi_handle_);
         bmi_handle_ = nullptr;
+        bmi2_dev_ = nullptr;
     }
 
     bmm350_coines_deinit();
@@ -832,34 +851,50 @@ void Compass::apply_tilt_compensation(float mag_x, float mag_y, float mag_z, flo
 
 bool Compass::updateSensorData()
 {
-    struct bmi2_sens_data sensor_data = {0};
-    /* Read BMI270 accelerometer and gyroscope data */
-    int8_t rslt = bmi2_get_sensor_data(&sensor_data, bmi2_dev_);
-    bool motion_ok = (rslt == BMI2_OK);
-    if (rslt == BMI2_OK) {
-        /* Parse accelerometer data */
-        float acc_x_mg = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
-        float acc_y_mg = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
-        float acc_z_mg = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
+    bool motion_ok = false;
+    float acc_x_mg = 0.0f;
+    float acc_y_mg = 0.0f;
+    float acc_z_mg = 0.0f;
+    float gyro_x_dps = 0.0f;
+    float gyro_y_dps = 0.0f;
+    float gyro_z_dps = 0.0f;
 
-        /* Parse gyroscope data */
-        float gyro_x_dps = (float)sensor_data.gyr.x / 16.4f;
-        float gyro_y_dps = -(float)sensor_data.gyr.y / 16.4f;
-        float gyro_z_dps = -(float)sensor_data.gyr.z / 16.4f;
-
-        /* Update complementary filter with new sensor data */
+    if (bmi270_collector_is_active()) {
+        acc_x_mg = g_soccer_sensor_data.acc[0];
+        acc_y_mg = g_soccer_sensor_data.acc[1];
+        acc_z_mg = g_soccer_sensor_data.acc[2];
+        gyro_x_dps = g_soccer_sensor_data.gyro[0];
+        gyro_y_dps = g_soccer_sensor_data.gyro[1];
+        gyro_z_dps = g_soccer_sensor_data.gyro[2];
+        motion_ok = true;
         update_complementary_filter(acc_x_mg, acc_y_mg, acc_z_mg,
                                     gyro_x_dps, gyro_y_dps, gyro_z_dps,
                                     comp_filter.dt);
     } else {
-        ESP_LOGE(TAG, "BMI270 get sensor data failed: %d", rslt);
-        sensor_online_ = false;
-        return false;
+        struct bmi2_sens_data sensor_data = {0};
+        int8_t rslt = bmi2_get_sensor_data(&sensor_data, bmi2_dev_);
+        motion_ok = (rslt == BMI2_OK);
+        if (rslt == BMI2_OK) {
+            acc_x_mg = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
+            acc_y_mg = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
+            acc_z_mg = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
+            gyro_x_dps = (float)sensor_data.gyr.x / 16.4f;
+            gyro_y_dps = -(float)sensor_data.gyr.y / 16.4f;
+            gyro_z_dps = -(float)sensor_data.gyr.z / 16.4f;
+            update_complementary_filter(acc_x_mg, acc_y_mg, acc_z_mg,
+                                        gyro_x_dps, gyro_y_dps, gyro_z_dps,
+                                        comp_filter.dt);
+        } else {
+            ESP_LOGE(TAG, "BMI270 get sensor data failed: %d", rslt);
+            sensor_online_ = false;
+            return false;
+        }
     }
 
     struct bmm350_mag_temp_data mag_data = {0};
-    /* Read BMM350 magnetometer data */
+    bmi270_collector_i2c_lock();
     int8_t mag_rslt = bmm350_get_compensated_mag_xyz_temp_data(&mag_data, &s_bmm350);
+    bmi270_collector_i2c_unlock();
     bool mag_ok = (mag_rslt == BMM350_OK);
     if (mag_rslt == BMM350_OK) {
         float mag_raw[3] = {(float)mag_data.x, (float)mag_data.y, (float)mag_data.z};
@@ -947,23 +982,19 @@ bool Compass::updateSensorData()
 
     sensor_online_ = (motion_ok && mag_ok);
 
-    /* Sync accelerometer, gyroscope, and orientation data to global buffer */
-    if (motion_ok) {
-        g_soccer_sensor_data.acc[0] = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
-        g_soccer_sensor_data.acc[1] = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
-        g_soccer_sensor_data.acc[2] = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
-
-        g_soccer_sensor_data.gyro[0] = (float)sensor_data.gyr.x / 16.4f;
-        g_soccer_sensor_data.gyro[1] = -(float)sensor_data.gyr.y / 16.4f;
-        g_soccer_sensor_data.gyro[2] = -(float)sensor_data.gyr.z / 16.4f;
+    if (motion_ok && !bmi270_collector_is_active()) {
+        g_soccer_sensor_data.acc[0] = acc_x_mg;
+        g_soccer_sensor_data.acc[1] = acc_y_mg;
+        g_soccer_sensor_data.acc[2] = acc_z_mg;
+        g_soccer_sensor_data.gyro[0] = gyro_x_dps;
+        g_soccer_sensor_data.gyro[1] = gyro_y_dps;
+        g_soccer_sensor_data.gyro[2] = gyro_z_dps;
+        g_soccer_sensor_data.timestamp = (uint32_t)(esp_timer_get_time() / 1000);
     }
 
     g_soccer_sensor_data.pitch = comp_filter.euler.pitch;
     g_soccer_sensor_data.roll = comp_filter.euler.roll;
     g_soccer_sensor_data.heading = current_heading_.load(std::memory_order_relaxed);
-    if (sensor_online_.load(std::memory_order_relaxed)) {
-        g_soccer_sensor_data.timestamp = (uint32_t)(esp_timer_get_time() / 1000);
-    }
 
     return true;
 
@@ -980,8 +1011,10 @@ void Compass::bmmDataThread()
         calibrateMagnetometer();
     }
 
-    comp_filter.dt = SAMPLE_RATE_MS / 1000.0f; // 10ms = 0.01s
+    comp_filter.dt = SAMPLE_RATE_MS / 1000.0f;
     comp_filter.initialized = false;
+
+    const TickType_t mag_period_ticks = pdMS_TO_TICKS(20);
 
     while (bmm_running_) {
         if (!is_app_running_) {
@@ -1004,7 +1037,8 @@ void Compass::bmmDataThread()
             continue;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(SAMPLE_RATE_MS));
+        /* Magnetometer / heading only — BMI270 is driven by GPTimer at 100 Hz */
+        vTaskDelay(mag_period_ticks);
     }
 
     ESP_LOGI(TAG, "Sensor read task stopped");

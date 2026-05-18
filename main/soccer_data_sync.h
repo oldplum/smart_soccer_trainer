@@ -8,7 +8,7 @@
 #define SOCCER_DATA_SYNC_H
 
 #include <stdint.h>
-#include <cstring>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,7 +64,7 @@ extern SoccerSensorData g_soccer_sensor_data;
  */
 static inline void soccer_data_init(SoccerSensorData *data)
 {
-    std::memset(data, 0, sizeof(SoccerSensorData));
+    memset(data, 0, sizeof(SoccerSensorData));
 }
 
 #ifdef __cplusplus

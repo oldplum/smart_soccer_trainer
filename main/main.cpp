@@ -21,6 +21,7 @@
 #include "esp_lib_utils.h"
 #include "esp_board_manager.h"
 #include "soccer_data_sync.h"
+#include "bmi270_collector.h"
 #include "wifi_client_connector.h"
 #include "wifi_data_sender.h"
 
@@ -36,26 +37,20 @@ static const char *WIFI_PASSWORD = "liyuhan061218";
 static const char *DATA_SERVER_IP = "10.91.248.197";  /* PC IP address */
 static const uint16_t DATA_SERVER_PORT = 5000;
 
-/* Debug serial output parameters */
-static const int DEBUG_SERIAL_PERIOD_MOTION_MS = 10;    // Motion data: 10ms
-static const int DEBUG_SERIAL_PERIOD_ENV_MS = 3000;     // Environmental data: 3 seconds
-static uint32_t last_motion_print_ms = 0;
+/* Debug serial: environmental data only (motion CSV is printed by bmi270_collector) */
+static const int DEBUG_SERIAL_PERIOD_ENV_MS = 3000;
 static uint32_t last_env_print_ms = 0;
-/* Last printed timestamps to avoid duplicate prints when data hasn't changed */
-static uint32_t last_printed_motion_ts = UINT32_MAX;
 static uint32_t last_printed_env_ts = UINT32_MAX;
 
-/* WiFi data sending parameters */
-static const int WIFI_DATA_SEND_PERIOD_MS = 50;  /* Send motion data every 50ms */
+/* WiFi data sending parameters — match BMI270_COLLECT_HZ (100 Hz → 10 ms) */
+static const int WIFI_DATA_SEND_PERIOD_MS = 10;
 static uint32_t last_wifi_send_ms = 0;
 static uint32_t last_sent_ts = UINT32_MAX;
 
 /**
  * @brief Debug serial output task
  *
- * Periodically outputs sensor data in CSV format:
- * - Motion data (acc, gyro, pitch, roll, heading) at 10ms intervals
- * - Environmental data (temp, humidity, pressure, iaq) at 3s intervals
+ * Environmental sensor CSV only. Motion data @ 100 Hz is printed by bmi270_collector.
  */
 void debug_serial_task(void *arg)
 {
@@ -66,33 +61,8 @@ void debug_serial_task(void *arg)
     while (1) {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000) - start_time_ms;
         auto temp_app = esp_brookesia::apps::Temperature::requestInstance();
-        auto compass_app = esp_brookesia::apps::Compass::requestInstance();
 
-        /* Output motion data every 10ms, but only if timestamp changed */
-        // TEMPORARILY DISABLED for WiFi connection debugging
-        /*
-        if (compass_app && compass_app->isSensorOnline() &&
-            (now_ms - last_motion_print_ms) >= DEBUG_SERIAL_PERIOD_MOTION_MS) {
-            uint32_t curr_ts = g_soccer_sensor_data.timestamp;
-            if (curr_ts != last_printed_motion_ts) {
-                printf("%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f\n",
-                       g_soccer_sensor_data.timestamp,
-                       g_soccer_sensor_data.acc[0],
-                       g_soccer_sensor_data.acc[1],
-                       g_soccer_sensor_data.acc[2],
-                       g_soccer_sensor_data.gyro[0],
-                       g_soccer_sensor_data.gyro[1],
-                       g_soccer_sensor_data.gyro[2],
-                       g_soccer_sensor_data.pitch,
-                       g_soccer_sensor_data.roll,
-                       g_soccer_sensor_data.heading);
-                last_printed_motion_ts = curr_ts;
-            }
-            last_motion_print_ms = now_ms;
-        }
-        */
-
-        /* Output environmental data every 3 seconds, but only if timestamp changed */
+        /* Environmental data every 3 seconds */
         if (temp_app && temp_app->isSensorOnline() &&
             (now_ms - last_env_print_ms) >= DEBUG_SERIAL_PERIOD_ENV_MS) {
             uint32_t curr_ts = g_soccer_sensor_data.timestamp;
@@ -127,8 +97,7 @@ void wifi_data_send_task(void *arg)
     while (1) {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000) - start_time_ms;
 
-        /* Send motion data every 50ms once WiFi is up; the sender will
-           establish the TCP connection on the first send attempt. */
+        /* Send motion data every 10 ms once WiFi is up (100 Hz). */
         if (wifi_client_is_connected() &&
             (now_ms - last_wifi_send_ms) >= WIFI_DATA_SEND_PERIOD_MS) {
             uint32_t curr_ts = g_soccer_sensor_data.timestamp;
@@ -164,8 +133,12 @@ extern "C" void app_main(void)
     /* Initialize sensor data buffer */
     soccer_data_init(&g_soccer_sensor_data);
 
-    /* Start debug serial task for sensor data output early so it runs
-       even if phone/display initialization fails */
+    /* 100 Hz GPTimer-driven BMI270 acquisition (no vTaskDelay sampling) */
+    if (!bmi270_collector_start()) {
+        ESP_LOGE("main", "BMI270 collector start failed");
+    }
+
+    /* Start debug serial task for environmental CSV output */
     {
         esp_utils::thread_config_guard debug_thread_config({
             .name = "debug_serial",
