@@ -18,31 +18,32 @@ extern "C" {
  * @brief Unified sensor data structure for soccer training
  *
  * This structure aggregates sensor data from multiple sources:
- * - Environmental sensors (BME690): temperature, humidity, pressure, IAQ
- * - Motion sensors (BMI270): accelerometer, gyroscope
- * - Orientation sensors (BMI270 + BMM350): pitch, roll, heading
+ * - Environmental sensors (reserved placeholders): temperature, humidity, pressure, IAQ
+ * - Motion sensors (reserved placeholders): accelerometer, gyroscope
+ * - Orientation sensors (reserved placeholders): pitch, roll, heading
  *
  * The structure is marked with __attribute__((packed)) for efficient
  * binary serialization and ESP-NOW wireless transmission.
  */
 typedef struct {
-    /* Environmental Data (from BME690 + BSEC) */
+    /* Environmental Data (reserved placeholders) */
     float temp;           /**< Temperature in °C */
     float humidity;       /**< Relative humidity in % RH */
     float pressure;       /**< Atmospheric pressure in Pa */
     float iaq;            /**< Indoor Air Quality index (0-500+) */
 
-    /* Motion Data (from BMI270) */
+    /* Motion Data (reserved placeholders) */
     float acc[3];         /**< Accelerometer data [X, Y, Z] in g */
     float gyro[3];        /**< Gyroscope data [X, Y, Z] in °/s */
 
-    /* Orientation Data (from complementary filter + magnetometer) */
+    /* Orientation Data (reserved placeholders) */
     float pitch;          /**< Pitch angle in degrees */
     float roll;           /**< Roll angle in degrees */
     float heading;        /**< Compass heading in degrees (0-360) */
 
     /* System Data */
     uint32_t timestamp;   /**< Timestamp in milliseconds since boot */
+    uint8_t env_data_valid; /**< Non-zero when environmental readings are live */
 
     /* Placeholder / Reserved Data (reserved for higher-level features)
      * - Action counters (to be computed by shot/pass detection model)
@@ -87,6 +88,11 @@ static inline void soccer_data_init(SoccerSensorData *data)
     std::memset(data, 0, sizeof(SoccerSensorData));
 
     /* Set sensible defaults for reserved placeholder fields */
+    data->temp = 25.0f;
+    data->humidity = 50.0f;
+    data->pressure = 101325.0f;
+    data->iaq = 0.0f;
+    data->env_data_valid = 0;
     data->shoot_count = 0;
     data->pass_count = 0;
     data->heart_rate = 80;
