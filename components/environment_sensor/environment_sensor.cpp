@@ -8,6 +8,8 @@
 #include "bme69x_defs.h"
 #include "bsec_datatypes.h"
 #include "bsec_interface.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "common.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -78,13 +80,91 @@ static void save_bsec_state()
         s_bsec_state_valid = true;
     } else {
         ESP_LOGW(TAG, "bsec_get_state failed: %d", bsec_status);
+        std::free(work_buffer);
+        return;
     }
 
+    /* Persist into NVS. Non-fatal: log warnings on errors. */
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("bsec", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs_open failed: %s", esp_err_to_name(err));
+        std::free(work_buffer);
+        return;
+    }
+
+    err = nvs_set_blob(nvs_handle, "state", s_bsec_state, s_bsec_state_len);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NOT_ENOUGH_SPACE) {
+            ESP_LOGW(TAG, "nvs_set_blob failed - no space: %s", esp_err_to_name(err));
+        } else {
+            ESP_LOGW(TAG, "nvs_set_blob failed: %s", esp_err_to_name(err));
+        }
+        nvs_close(nvs_handle);
+        std::free(work_buffer);
+        return;
+    }
+
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
+    }
+
+    nvs_close(nvs_handle);
     std::free(work_buffer);
 }
 
 static void restore_bsec_state()
 {
+    /* Try to read persisted state from NVS first. If not found, and
+       in-memory state is invalid, do nothing. NVS errors are non-fatal. */
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("bsec", NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs_open failed: %s", esp_err_to_name(err));
+        /* If NVS not available, fall back to any in-memory state (if present). */
+        if (!s_bsec_state_valid || s_bsec_state_len == 0) {
+            return;
+        }
+    } else {
+        size_t required_size = sizeof(s_bsec_state);
+        err = nvs_get_blob(nvs_handle, "state", NULL, &required_size);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGI(TAG, "No saved BSEC state in NVS");
+            nvs_close(nvs_handle);
+            if (!s_bsec_state_valid || s_bsec_state_len == 0) {
+                return;
+            }
+        } else if (err != ESP_OK) {
+            ESP_LOGW(TAG, "nvs_get_blob size query failed: %s", esp_err_to_name(err));
+            nvs_close(nvs_handle);
+            if (!s_bsec_state_valid || s_bsec_state_len == 0) {
+                return;
+            }
+        } else {
+            if (required_size > sizeof(s_bsec_state)) {
+                ESP_LOGW(TAG, "Saved BSEC state too large (%u bytes)", static_cast<unsigned int>(required_size));
+                nvs_close(nvs_handle);
+                if (!s_bsec_state_valid || s_bsec_state_len == 0) {
+                    return;
+                }
+            } else {
+                err = nvs_get_blob(nvs_handle, "state", s_bsec_state, &required_size);
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "nvs_get_blob read failed: %s", esp_err_to_name(err));
+                    nvs_close(nvs_handle);
+                    if (!s_bsec_state_valid || s_bsec_state_len == 0) {
+                        return;
+                    }
+                } else {
+                    s_bsec_state_len = static_cast<uint32_t>(required_size);
+                    s_bsec_state_valid = true;
+                    nvs_close(nvs_handle);
+                }
+            }
+        }
+    }
+
     if (!s_bsec_state_valid || s_bsec_state_len == 0) {
         return;
     }
