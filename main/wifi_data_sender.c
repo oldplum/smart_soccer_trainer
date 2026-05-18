@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -110,8 +111,7 @@ bool wifi_data_sender_send_motion_data(
     const float acc[3],
     const float gyro[3],
     float pitch,
-    float roll,
-    float heading
+    float roll
 )
 {
     if (!s_socket_mutex) {
@@ -131,14 +131,17 @@ bool wifi_data_sender_send_motion_data(
         }
     }
 
-    /* Format data as CSV: timestamp,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,pitch,roll,heading */
+    /* Calculate total acceleration magnitude */
+    float acc_total = sqrt(acc[0]*acc[0] + acc[1]*acc[1] + acc[2]*acc[2]);
+
+    /* Format data as CSV: timestamp,acc_x,acc_y,acc_z,acc_total,gyro_x,gyro_y,gyro_z,pitch,roll */
     char buffer[SEND_BUFFER_SIZE];
     int len = snprintf(buffer, sizeof(buffer),
-                      "%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f\n",
+                      "%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f\n",
                       (unsigned long)timestamp,
-                      acc[0], acc[1], acc[2],
+                      acc[0], acc[1], acc[2], acc_total,
                       gyro[0], gyro[1], gyro[2],
-                      pitch, roll, heading);
+                      pitch, roll);
 
     if (len < 0 || len >= (int)sizeof(buffer)) {
         ESP_LOGE(TAG, "Buffer overflow when formatting data");

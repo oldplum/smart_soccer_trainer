@@ -28,18 +28,18 @@ class MotionDataReceiver:
         try:
             self.csv_file_handle = open(self.csv_file, 'w', newline='')
             self.csv_writer = csv.writer(self.csv_file_handle)
-            # CSV列: timestamp, acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z, pitch, roll, heading
+            # CSV列: timestamp, acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z, pitch, roll, acc_total
             self.csv_writer.writerow([
                 'Timestamp(ms)',
                 'Acc_X(g)',
                 'Acc_Y(g)',
                 'Acc_Z(g)',
+                'Acc_Total(g)',
                 'Gyro_X(deg/s)',
                 'Gyro_Y(deg/s)',
                 'Gyro_Z(deg/s)',
                 'Pitch(deg)',
-                'Roll(deg)',
-                'Heading(deg)'
+                'Roll(deg)'
             ])
             self.csv_file_handle.flush()
             print(f"✓ CSV文件已创建: {self.csv_file}")
@@ -89,7 +89,7 @@ class MotionDataReceiver:
                         continue
 
                     try:
-                        # 解析CSV行: timestamp,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,pitch,roll,heading
+                        # 解析CSV行: timestamp,acc_x,acc_y,acc_z,acc_total,gyro_x,gyro_y,gyro_z,pitch,roll
                         values = line.split(',')
                         if len(values) == 10:
                             self.csv_writer.writerow(values)
