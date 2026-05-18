@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 
 #include "bme69x.h"
 #include "bme69x_defs.h"
@@ -59,13 +60,18 @@ static void sleep_until_ns(int64_t target_time_ns)
 
 static void save_bsec_state()
 {
-    uint8_t work_buffer[BSEC_MAX_WORKBUFFER_SIZE] = {};
     uint32_t n_state = sizeof(s_bsec_state);
+    uint8_t *work_buffer = static_cast<uint8_t *>(std::malloc(BSEC_MAX_WORKBUFFER_SIZE));
+    if (work_buffer == nullptr) {
+        ESP_LOGW(TAG, "save_bsec_state: malloc failed");
+        return;
+    }
+
     bsec_library_return_t bsec_status = bsec_get_state(0,
                                                         s_bsec_state,
                                                         n_state,
                                                         work_buffer,
-                                                        sizeof(work_buffer),
+                                                        BSEC_MAX_WORKBUFFER_SIZE,
                                                         &n_state);
     if (bsec_status == BSEC_OK && n_state > 0 && n_state <= sizeof(s_bsec_state)) {
         s_bsec_state_len = n_state;
@@ -73,6 +79,8 @@ static void save_bsec_state()
     } else {
         ESP_LOGW(TAG, "bsec_get_state failed: %d", bsec_status);
     }
+
+    std::free(work_buffer);
 }
 
 static void restore_bsec_state()
@@ -81,16 +89,23 @@ static void restore_bsec_state()
         return;
     }
 
-    uint8_t work_buffer[BSEC_MAX_WORKBUFFER_SIZE] = {};
+    uint8_t *work_buffer = static_cast<uint8_t *>(std::malloc(BSEC_MAX_WORKBUFFER_SIZE));
+    if (work_buffer == nullptr) {
+        ESP_LOGW(TAG, "restore_bsec_state: malloc failed");
+        return;
+    }
+
     bsec_library_return_t bsec_status = bsec_set_state(s_bsec_state,
                                                        s_bsec_state_len,
                                                        work_buffer,
-                                                       sizeof(work_buffer));
+                                                       BSEC_MAX_WORKBUFFER_SIZE);
     if (bsec_status != BSEC_OK) {
         ESP_LOGW(TAG, "bsec_set_state failed: %d", bsec_status);
     } else {
         ESP_LOGI(TAG, "Restored BSEC state blob (%lu bytes)", static_cast<unsigned long>(s_bsec_state_len));
     }
+
+    std::free(work_buffer);
 }
 
 static bool init_hardware()
@@ -436,7 +451,7 @@ extern "C" bool start_environment_sensor_task(void)
 
     BaseType_t ret = xTaskCreate(environment_sensor_task,
                                  "env_sensor",
-                                 6144,
+                                 8192,
                                  nullptr,
                                  tskIDLE_PRIORITY + 1,
                                  nullptr);
