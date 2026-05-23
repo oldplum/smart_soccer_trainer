@@ -59,6 +59,8 @@ static QueueHandle_t s_print_queue = NULL;
 static TaskHandle_t s_collect_task = NULL;
 static TaskHandle_t s_print_task = NULL;
 static SemaphoreHandle_t s_i2c_mutex = NULL;
+static bmi270_csv_line_sink_t s_csv_sink = NULL;
+static void *s_csv_sink_user_data = NULL;
 
 static volatile uint32_t s_isr_enqueued = 0;
 static volatile uint32_t s_isr_dropped = 0;
@@ -230,7 +232,13 @@ static void bmi270_print_task(void *arg)
                            sample.gx, sample.gy, sample.gz,
                            sample.pitch, sample.roll);
         if (len > 0) {
-            fwrite(line, 1, (size_t)len, stdout);
+            bool delivered = false;
+            if (s_csv_sink != NULL) {
+                delivered = s_csv_sink(line, (size_t)len, s_csv_sink_user_data);
+            }
+            if (!delivered) {
+                fwrite(line, 1, (size_t)len, stdout);
+            }
         }
     }
 
@@ -437,4 +445,10 @@ void bmi270_collector_i2c_unlock(void)
     if (s_i2c_mutex) {
         xSemaphoreGive(s_i2c_mutex);
     }
+}
+
+void bmi270_collector_set_csv_sink(bmi270_csv_line_sink_t sink, void *user_data)
+{
+    s_csv_sink = sink;
+    s_csv_sink_user_data = user_data;
 }

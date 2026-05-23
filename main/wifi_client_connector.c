@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "lwip/inet.h"
+#include "wifi_data_sender.h"
 
 #define TAG "wifi_client"
 
@@ -40,6 +41,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "WiFi connected with IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "WiFi gateway: " IPSTR, IP2STR(&event->ip_info.gw));
+        wifi_data_sender_update_destination_ip(event->ip_info.gw.addr);
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         xEventGroupClearBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
     }
@@ -93,7 +96,7 @@ bool wifi_client_init(const char *ssid, const char *password)
     /* Configure WiFi */
     wifi_config_t wifi_config = {
         .sta = {
-            .threshold.authmode = WIFI_AUTH_WPA2_WPA3_PSK,  /* Support WPA2/WPA3 mixed mode */
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,  /* Allow common phone hotspots */
             .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
             .sae_h2e_identifier = "",
             .pmf_cfg = {

@@ -18,62 +18,66 @@
 
 #define TAG "wifi_sender"
 #define SEND_BUFFER_SIZE 512
-#define RECONNECT_TIMEOUT_MS 5000
 
 static int s_socket_fd = -1;
 static SemaphoreHandle_t s_socket_mutex = NULL;
 static char s_server_ip[16] = {0};
 static uint16_t s_server_port = 0;
-static uint32_t s_last_reconnect_ms = 0;
+static struct sockaddr_in s_server_addr;
+static bool s_server_addr_valid = false;
 
 /**
- * @brief Create socket and connect to server
+ * @brief Create UDP socket for the configured server
  */
 static bool _connect_to_server(void)
 {
     if (s_socket_fd >= 0) {
-        return true;  /* Already connected */
+        return true;
     }
 
-    /* Rate limit connection attempts */
-    uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    if (now_ms - s_last_reconnect_ms < RECONNECT_TIMEOUT_MS) {
-        return false;
-    }
-    s_last_reconnect_ms = now_ms;
-
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(s_server_port);
-
-    /* Convert IP string to address */
-    if (inet_pton(AF_INET, s_server_ip, &server_addr.sin_addr) <= 0) {
-        ESP_LOGE(TAG, "Invalid IP address: %s", s_server_ip);
+    if (!s_server_addr_valid) {
+        ESP_LOGE(TAG, "Server address is not configured");
         return false;
     }
 
-    s_socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    s_socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (s_socket_fd < 0) {
-        ESP_LOGE(TAG, "Failed to create socket: errno=%d", errno);
+        ESP_LOGE(TAG, "Failed to create UDP socket: errno=%d", errno);
         return false;
     }
 
-    /* Set non-blocking mode with timeout */
     struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
     setsockopt(s_socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(s_socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-    ESP_LOGI(TAG, "Attempting connection to server %s:%d (fd=%d)", s_server_ip, s_server_port, s_socket_fd);
-    int conn_result = connect(s_socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
-    if (conn_result < 0) {
-        ESP_LOGE(TAG, "Connection failed: errno=%d (%s)", errno, strerror(errno));
+    ESP_LOGI(TAG, "UDP sender ready for %s:%d (fd=%d)", s_server_ip, s_server_port, s_socket_fd);
+    return true;
+}
+
+static bool _send_udp_line(const char *line, size_t len)
+{
+    if (!line || len == 0) {
+        return false;
+    }
+
+    if (!_connect_to_server()) {
+        return false;
+    }
+
+    int sent = sendto(s_socket_fd, line, len, 0,
+                      (struct sockaddr *)&s_server_addr,
+                      sizeof(s_server_addr));
+    if (sent < 0) {
+        ESP_LOGW(TAG, "UDP sendto failed: errno=%d (%s)", errno, strerror(errno));
         close(s_socket_fd);
         s_socket_fd = -1;
         return false;
     }
 
-    ESP_LOGI(TAG, "✓ Successfully connected to server %s:%d", s_server_ip, s_server_port);
+    if (sent != (int)len) {
+        ESP_LOGW(TAG, "Partial UDP send: %d/%u bytes", sent, (unsigned)len);
+    }
+
     return true;
 }
 
@@ -99,7 +103,16 @@ bool wifi_data_sender_init(const char *server_ip, uint16_t server_port)
     s_server_ip[sizeof(s_server_ip) - 1] = '\0';
     s_server_port = server_port;
 
-    ESP_LOGI(TAG, "WiFi data sender initialized for %s:%d", server_ip, server_port);
+    memset(&s_server_addr, 0, sizeof(s_server_addr));
+    s_server_addr.sin_family = AF_INET;
+    s_server_addr.sin_port = htons(s_server_port);
+    if (inet_pton(AF_INET, s_server_ip, &s_server_addr.sin_addr) <= 0) {
+        ESP_LOGE(TAG, "Invalid IP address: %s", s_server_ip);
+        return false;
+    }
+    s_server_addr_valid = true;
+
+    ESP_LOGI(TAG, "WiFi UDP data sender initialized for %s:%d", server_ip, server_port);
     return true;
 }
 
@@ -123,14 +136,6 @@ bool wifi_data_sender_send_motion_data(
         return false;
     }
 
-    /* Attempt connection if not connected */
-    if (s_socket_fd < 0) {
-        if (!_connect_to_server()) {
-            xSemaphoreGive(s_socket_mutex);
-            return false;
-        }
-    }
-
     /* Calculate total acceleration magnitude */
     float acc_total = sqrt(acc[0]*acc[0] + acc[1]*acc[1] + acc[2]*acc[2]);
 
@@ -149,19 +154,48 @@ bool wifi_data_sender_send_motion_data(
         return false;
     }
 
-    /* Send data */
-    int sent = send(s_socket_fd, buffer, len, 0);
-    if (sent < 0) {
-        ESP_LOGW(TAG, "Send failed: errno=%d, closing socket", errno);
-        close(s_socket_fd);
-        s_socket_fd = -1;
-        xSemaphoreGive(s_socket_mutex);
+    bool sent_ok = _send_udp_line(buffer, (size_t)len);
+
+    xSemaphoreGive(s_socket_mutex);
+    return sent_ok;
+}
+
+bool wifi_data_sender_send_csv_line(const char *line, size_t len)
+{
+    if (!s_socket_mutex) {
         return false;
     }
 
-    if (sent != len) {
-        ESP_LOGW(TAG, "Partial send: %d/%d bytes", sent, len);
+    if (xSemaphoreTake(s_socket_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire socket mutex");
+        return false;
     }
+
+    bool sent_ok = _send_udp_line(line, len);
+    xSemaphoreGive(s_socket_mutex);
+    return sent_ok;
+}
+
+bool wifi_data_sender_update_destination_ip(uint32_t gateway_addr)
+{
+    if (!s_socket_mutex) {
+        return false;
+    }
+
+    if (xSemaphoreTake(s_socket_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire socket mutex");
+        return false;
+    }
+
+    s_server_addr.sin_family = AF_INET;
+    s_server_addr.sin_port = htons(s_server_port);
+    s_server_addr.sin_addr.s_addr = gateway_addr;
+    s_server_addr_valid = true;
+
+    char ip_str[16] = {0};
+    ip4_addr_t gateway_ip = {.addr = gateway_addr};
+    ip4addr_ntoa_r(&gateway_ip, ip_str, sizeof(ip_str));
+    ESP_LOGI(TAG, "UDP destination updated to %s:%d", ip_str, s_server_port);
 
     xSemaphoreGive(s_socket_mutex);
     return true;

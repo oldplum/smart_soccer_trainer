@@ -8,6 +8,7 @@
 #define BMI270_COLLECTOR_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include "i2c_bus.h"
 
 #ifdef __cplusplus
@@ -24,6 +25,9 @@ bool bmi270_collector_is_active(void);
 i2c_bus_handle_t bmi270_collector_get_i2c_bus(void);
 void bmi270_collector_i2c_lock(void);
 void bmi270_collector_i2c_unlock(void);
+
+typedef bool (*bmi270_csv_line_sink_t)(const char *line, size_t len, void *user_data);
+void bmi270_collector_set_csv_sink(bmi270_csv_line_sink_t sink, void *user_data);
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +39,21 @@ bool wifi_data_sender_send_motion_data(
     float pitch,
     float roll
 );
+
+/**
+ * @brief Send a preformatted CSV line using UDP
+ * @param line CSV line buffer
+ * @param len Length of the CSV line in bytes
+ * @return true if sent successfully, false otherwise
+ */
+bool wifi_data_sender_send_csv_line(const char *line, size_t len);
+
+/**
+ * @brief Update the UDP destination address.
+ * @param gateway_addr Gateway IPv4 address in network byte order.
+ * @return true if updated successfully, false otherwise.
+ */
+bool wifi_data_sender_update_destination_ip(uint32_t gateway_addr);
 
 /**
  * @brief Check if sender is connected

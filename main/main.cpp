@@ -9,10 +9,12 @@
 #include "esp_brookesia_app_compass.hpp"
 #include "boost/thread.hpp"
 #include <cstdio>
+#include <cstring>
 #include <new>
 #include <vector>
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #ifdef ESP_UTILS_LOG_TAG
 #   undef ESP_UTILS_LOG_TAG
@@ -34,7 +36,7 @@ SoccerSensorData g_soccer_sensor_data = {};
 /* WiFi configuration */
 static const char *WIFI_SSID = "oldplum's HONOR 400";
 static const char *WIFI_PASSWORD = "liyuhan061218";
-static const char *DATA_SERVER_IP = "10.91.248.197";  /* PC IP address */
+static const char *DATA_SERVER_IP = "10.132.164.189";  /* Hotspot/receiver IP address */
 static const uint16_t DATA_SERVER_PORT = 5000;
 
 /* Debug serial: environmental data only (motion CSV is printed by bmi270_collector) */
@@ -42,10 +44,117 @@ static const int DEBUG_SERIAL_PERIOD_ENV_MS = 3000;
 static uint32_t last_env_print_ms = 0;
 static uint32_t last_printed_env_ts = UINT32_MAX;
 
-/* WiFi data sending parameters — match BMI270_COLLECT_HZ (100 Hz → 10 ms) */
-static const int WIFI_DATA_SEND_PERIOD_MS = 10;
-static uint32_t last_wifi_send_ms = 0;
-static uint32_t last_sent_ts = UINT32_MAX;
+static const size_t UDP_BATCH_MAX_BYTES = 500;
+static const size_t UDP_BATCH_BUFFER_SIZE = 1024;
+static const uint32_t UDP_BATCH_MAX_COUNT = 10;
+static const int64_t UDP_BATCH_MAX_INTERVAL_US = 100000;
+
+static char s_udp_buffer[UDP_BATCH_BUFFER_SIZE];
+static size_t s_udp_len = 0;
+static uint32_t s_udp_count = 0;
+static int64_t s_udp_batch_start_us = 0;
+static SemaphoreHandle_t s_udp_buffer_mutex = nullptr;
+
+static void udp_reset_buffer_locked(void)
+{
+    s_udp_len = 0;
+    s_udp_count = 0;
+    s_udp_batch_start_us = 0;
+}
+
+static void udp_flush_buffer_locked(void)
+{
+    if (s_udp_len == 0) {
+        return;
+    }
+
+    wifi_data_sender_send_csv_line(s_udp_buffer, s_udp_len);
+    udp_reset_buffer_locked();
+}
+
+static void udp_flush_buffer(void)
+{
+    if (s_udp_buffer_mutex == nullptr) {
+        return;
+    }
+
+    if (xSemaphoreTake(s_udp_buffer_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return;
+    }
+
+    udp_flush_buffer_locked();
+
+    xSemaphoreGive(s_udp_buffer_mutex);
+}
+
+static void udp_batch_flush_task(void *arg)
+{
+    (void)arg;
+
+    while (true) {
+        if (s_udp_len > 0 && s_udp_batch_start_us != 0) {
+            int64_t now_us = esp_timer_get_time();
+            if ((now_us - s_udp_batch_start_us) >= UDP_BATCH_MAX_INTERVAL_US) {
+                udp_flush_buffer();
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+static bool udp_csv_sink(const char *line, size_t len, void *user_data)
+{
+    (void)user_data;
+
+    if (s_udp_buffer_mutex == nullptr) {
+        return false;
+    }
+
+    if (!wifi_client_is_connected()) {
+        if (xSemaphoreTake(s_udp_buffer_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            udp_reset_buffer_locked();
+            xSemaphoreGive(s_udp_buffer_mutex);
+        }
+        return false;
+    }
+
+    if (line == nullptr || len == 0) {
+        return true;
+    }
+
+    if (len > UDP_BATCH_BUFFER_SIZE) {
+        return wifi_data_sender_send_csv_line(line, len);
+    }
+
+    if (xSemaphoreTake(s_udp_buffer_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return false;
+    }
+
+    int64_t now_us = esp_timer_get_time();
+    if (s_udp_len == 0) {
+        s_udp_batch_start_us = now_us;
+    }
+
+    if (s_udp_len + len > UDP_BATCH_BUFFER_SIZE) {
+        udp_flush_buffer_locked();
+        s_udp_batch_start_us = now_us;
+    }
+
+    memcpy(s_udp_buffer + s_udp_len, line, len);
+    s_udp_len += len;
+    s_udp_count++;
+
+    if (s_udp_count >= UDP_BATCH_MAX_COUNT ||
+        s_udp_len >= UDP_BATCH_MAX_BYTES ||
+        (now_us - s_udp_batch_start_us) >= UDP_BATCH_MAX_INTERVAL_US) {
+        udp_flush_buffer_locked();
+    }
+
+    xSemaphoreGive(s_udp_buffer_mutex);
+
+    return true;
+}
 
 /**
  * @brief Debug serial output task
@@ -79,47 +188,6 @@ void debug_serial_task(void *arg)
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));  // 5ms delay to prevent blocking
-    }
-}
-
-/**
- * @brief WiFi data sending task
- *
- * Periodically sends motion sensor data (acc, gyro, pitch, roll, heading) to PC
- * via WiFi only (no serial output)
- */
-void wifi_data_send_task(void *arg)
-{
-    ESP_UTILS_LOGI("WiFi send task started");
-
-    uint32_t start_time_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-    while (1) {
-        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000) - start_time_ms;
-
-        /* Send motion data every 10 ms once WiFi is up (100 Hz). */
-        if (wifi_client_is_connected() &&
-            (now_ms - last_wifi_send_ms) >= WIFI_DATA_SEND_PERIOD_MS) {
-            uint32_t curr_ts = g_soccer_sensor_data.timestamp;
-            if (curr_ts != last_sent_ts) {
-                float acc_copy[3] = {g_soccer_sensor_data.acc[0], g_soccer_sensor_data.acc[1], g_soccer_sensor_data.acc[2]};
-                float gyro_copy[3] = {g_soccer_sensor_data.gyro[0], g_soccer_sensor_data.gyro[1], g_soccer_sensor_data.gyro[2]};
-                if (!wifi_data_sender_is_connected()) {
-                    ESP_LOGI("main", "TCP sender not connected yet, trying to connect to PC");
-                }
-                wifi_data_sender_send_motion_data(
-                    g_soccer_sensor_data.timestamp,
-                    acc_copy,
-                    gyro_copy,
-                    g_soccer_sensor_data.pitch,
-                    g_soccer_sensor_data.roll
-                );
-                last_sent_ts = curr_ts;
-            }
-            last_wifi_send_ms = now_ms;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 
@@ -195,34 +263,36 @@ extern "C" void app_main(void)
 
     /* Initialize WiFi client connection */
     ESP_LOGI("main", "Initializing WiFi client...");
+    s_udp_buffer_mutex = xSemaphoreCreateMutex();
+    if (s_udp_buffer_mutex == nullptr) {
+        ESP_LOGE("main", "Failed to create UDP batch mutex");
+    }
+
+    if (s_udp_buffer_mutex != nullptr && wifi_data_sender_init(DATA_SERVER_IP, DATA_SERVER_PORT)) {
+        bmi270_collector_set_csv_sink(udp_csv_sink, nullptr);
+        ESP_LOGI("main", "UDP data sender initialized, target: %s:%d", DATA_SERVER_IP, DATA_SERVER_PORT);
+
+        BaseType_t task_created = xTaskCreate(
+            udp_batch_flush_task,
+            "udp_batch_flush",
+            3072,
+            nullptr,
+            5,
+            nullptr
+        );
+        if (task_created != pdPASS) {
+            ESP_LOGE("main", "Failed to create UDP batch flush task");
+        }
+    } else {
+        ESP_LOGE("main", "Failed to initialize UDP data sender");
+    }
+
     if (wifi_client_init(WIFI_SSID, WIFI_PASSWORD)) {
         vTaskDelay(pdMS_TO_TICKS(2000));  /* Wait for WiFi to stabilize */
 
         char ip_str[16] = {0};
         if (wifi_client_get_ip(ip_str, sizeof(ip_str))) {
             ESP_LOGI("main", "WiFi connected, IP: %s", ip_str);
-
-            /* Initialize data sender to send to PC */
-            if (wifi_data_sender_init(DATA_SERVER_IP, DATA_SERVER_PORT)) {
-                ESP_LOGI("main", "Data sender initialized, target: %s:%d", DATA_SERVER_IP, DATA_SERVER_PORT);
-
-                /* Create WiFi data sending task */
-                BaseType_t task_created = xTaskCreate(
-                    wifi_data_send_task,
-                    "wifi_send",
-                    4096,
-                    nullptr,
-                    5,
-                    nullptr
-                );
-                if (task_created != pdPASS) {
-                    ESP_LOGE("main", "Failed to create WiFi send task");
-                } else {
-                    ESP_LOGI("main", "WiFi data sending task created");
-                }
-            } else {
-                ESP_LOGE("main", "Failed to initialize data sender");
-            }
         } else {
             ESP_LOGW("main", "Failed to get IP address");
         }
