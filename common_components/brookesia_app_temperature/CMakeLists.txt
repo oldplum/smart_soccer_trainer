@@ -25,8 +25,14 @@ set_source_files_properties(
 )
 
 # Link BSEC library
+if(IDF_TARGET MATCHES "esp32c[0-9]" OR IDF_TARGET STREQUAL "esp32h2")
+    set(BSEC_TARGET "esp32_risc_v")
+else()
+    set(BSEC_TARGET "${IDF_TARGET}")
+endif()
+
 target_link_libraries(${COMPONENT_LIB} PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/bsec_IAQ/bin/esp/esp32_risc_v/libalgobsec.a"
+    "${CMAKE_CURRENT_SOURCE_DIR}/bsec_IAQ/bin/esp/${BSEC_TARGET}/libalgobsec.a"
 )
 
 # Add linker flags for the library

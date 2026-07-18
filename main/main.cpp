@@ -7,6 +7,7 @@
 #include "brookesia/system_phone/phone.hpp"
 #include "esp_brookesia_app_temperature.hpp"
 #include "esp_brookesia_app_compass.hpp"
+#include "esp_brookesia_app_gnss.hpp"
 #include "boost/thread.hpp"
 #include <cstdio>
 #include <new>
@@ -31,11 +32,14 @@ SoccerSensorData g_soccer_sensor_data = {};
 /* Debug serial output parameters */
 static const int DEBUG_SERIAL_PERIOD_MOTION_MS = 10;    // Motion data: 10ms
 static const int DEBUG_SERIAL_PERIOD_ENV_MS = 3000;     // Environmental data: 3 seconds
+static const int DEBUG_SERIAL_PERIOD_GNSS_MS = 1000;    // GNSS data: 1 second (matches 1Hz update rate)
 static uint32_t last_motion_print_ms = 0;
 static uint32_t last_env_print_ms = 0;
+static uint32_t last_gnss_print_ms = 0;
 /* Last printed timestamps to avoid duplicate prints when data hasn't changed */
 static uint32_t last_printed_motion_ts = UINT32_MAX;
 static uint32_t last_printed_env_ts = UINT32_MAX;
+static uint32_t last_printed_gnss_ts = UINT32_MAX;
 
 /**
  * @brief 调试串口任务 - 把传感器数据打印到串口
@@ -115,6 +119,26 @@ void debug_serial_task(void *arg)
                 last_printed_env_ts = curr_ts;
             }
             last_env_print_ms = now_ms;
+        }
+
+        /* Output GNSS data every 1 second, but only if timestamp changed */
+        auto gnss_app = esp_brookesia::apps::Gnss::requestInstance();
+        if (gnss_app && gnss_app->isSensorOnline() &&
+            (now_ms - last_gnss_print_ms) >= DEBUG_SERIAL_PERIOD_GNSS_MS) {
+            uint32_t curr_ts = g_soccer_sensor_data.timestamp;
+            if (curr_ts != last_printed_gnss_ts) {
+                printf("%lu,GNSS,%.7f,%.7f,%.1f,%.1f,%.1f,%u,%u\n",
+                       g_soccer_sensor_data.timestamp,
+                       g_soccer_sensor_data.latitude,
+                       g_soccer_sensor_data.longitude,
+                       g_soccer_sensor_data.altitude,
+                       g_soccer_sensor_data.speed,
+                       g_soccer_sensor_data.course,
+                       g_soccer_sensor_data.satellites,
+                       g_soccer_sensor_data.fix_quality);
+                last_printed_gnss_ts = curr_ts;
+            }
+            last_gnss_print_ms = now_ms;
         }
 
         // 延时 5 毫秒，把 CPU 让给其他任务
@@ -226,6 +250,14 @@ extern "C" void app_main(void)
         ESP_LOGI("main", "Starting Compass sensor collection");
         if (!compass_app->startSensorCollection()) {
             ESP_LOGW("main", "Failed to start Compass sensor collection");
+        }
+    }
+
+    auto gnss_app = esp_brookesia::apps::Gnss::requestInstance();
+    if (gnss_app) {
+        ESP_LOGI("main", "Starting GNSS sensor collection");
+        if (!gnss_app->startSensorCollection()) {
+            ESP_LOGW("main", "Failed to start GNSS sensor collection");
         }
     }
 
