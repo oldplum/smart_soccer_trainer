@@ -9,6 +9,7 @@
 #include "brookesia/system_phone/app.hpp"
 #include "boost/thread.hpp"
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include <atomic>
 #include <cstdint>
 

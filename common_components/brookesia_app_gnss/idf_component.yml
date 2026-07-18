@@ -1,2 +1,7 @@
 dependencies:
   idf: ">=5.5"
+  espressif/esp-lib-utils: "^0.3.0"
+  espressif/brookesia_system_phone:
+    version: "0.7.*"
+    path: "../brookesia_system_phone"
+    public: true
