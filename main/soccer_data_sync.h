@@ -53,6 +53,11 @@ typedef struct {
     uint8_t fix_quality;  /**< Fix quality: 0=invalid, 1=GPS, 2=DGPS, 4=RTK fixed, 5=RTK float */
     uint8_t gnss_valid;   /**< GNSS data validity flag (boolean) */
 
+    /* Heart Rate & SpO2 Data (from MAX30102) */
+    int16_t heart_rate;   /**< Heart rate in beats per minute (bpm) */
+    int16_t spo2;          /**< Blood oxygen saturation percentage (%) */
+    uint8_t hr_valid;      /**< Heart rate data validity flag (boolean) */
+
     /* System Data */
     uint32_t timestamp;   /**< Timestamp in milliseconds since boot */
 } __attribute__((packed)) SoccerSensorData;

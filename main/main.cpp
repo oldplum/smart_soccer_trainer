@@ -8,6 +8,7 @@
 #include "esp_brookesia_app_temperature.hpp"
 #include "esp_brookesia_app_compass.hpp"
 #include "esp_brookesia_app_gnss.hpp"
+#include "esp_brookesia_app_max30102.hpp"
 #include "boost/thread.hpp"
 #include <cstdio>
 #include <new>
@@ -33,13 +34,16 @@ SoccerSensorData g_soccer_sensor_data = {};
 static const int DEBUG_SERIAL_PERIOD_MOTION_MS = 10;    // Motion data: 10ms
 static const int DEBUG_SERIAL_PERIOD_ENV_MS = 3000;     // Environmental data: 3 seconds
 static const int DEBUG_SERIAL_PERIOD_GNSS_MS = 1000;    // GNSS data: 1 second (matches 1Hz update rate)
+static const int DEBUG_SERIAL_PERIOD_HR_MS = 1000;      // Heart rate data: 1 second
 static uint32_t last_motion_print_ms = 0;
 static uint32_t last_env_print_ms = 0;
 static uint32_t last_gnss_print_ms = 0;
+static uint32_t last_hr_print_ms = 0;
 /* Last printed timestamps to avoid duplicate prints when data hasn't changed */
 static uint32_t last_printed_motion_ts = UINT32_MAX;
 static uint32_t last_printed_env_ts = UINT32_MAX;
 static uint32_t last_printed_gnss_ts = UINT32_MAX;
+static uint32_t last_printed_hr_ts = UINT32_MAX;
 
 /**
  * @brief 调试串口任务 - 把传感器数据打印到串口
@@ -141,6 +145,21 @@ void debug_serial_task(void *arg)
             last_gnss_print_ms = now_ms;
         }
 
+        /* Output Heart Rate & SpO2 data every 1 second */
+        auto hr_app = esp_brookesia::apps::Max30102::requestInstance();
+        if (hr_app && hr_app->isSensorOnline() &&
+            (now_ms - last_hr_print_ms) >= DEBUG_SERIAL_PERIOD_HR_MS) {
+            uint32_t curr_ts = g_soccer_sensor_data.timestamp;
+            if (curr_ts != last_printed_hr_ts) {
+                printf("%lu,HR,%d,%d\n",
+                       g_soccer_sensor_data.timestamp,
+                       g_soccer_sensor_data.heart_rate,
+                       g_soccer_sensor_data.spo2);
+                last_printed_hr_ts = curr_ts;
+            }
+            last_hr_print_ms = now_ms;
+        }
+
         // 延时 5 毫秒，把 CPU 让给其他任务
         // 如果不休眠，这个循环会一直霸占 CPU，其他程序就没法运行了
         vTaskDelay(pdMS_TO_TICKS(5));
@@ -171,9 +190,10 @@ extern "C" void app_main(void)
     esp_board_manager_print_board_info();
     // 初始化板级管理器（配置 GPIO、电源、外设等）
     int ret = esp_board_manager_init();
-    // assert = "断言"：如果初始化失败（ret != 0），程序直接死机报错
-    // 这一步必须成功，否则后面啥也干不了
-    assert((ret == 0) && "Board manager initialization failed");
+    if (ret != 0) {
+        ESP_LOGW("main", "Board manager initialization failed (code %d). "
+                         "This is normal if display/touch screen is not connected. Continuing...", ret);
+    }
 
     /* ========== 第 2 步：初始化传感器数据缓冲区 ========== */
     // g_soccer_sensor_data 是一个全局变量，用来存放所有传感器的数据
@@ -209,23 +229,23 @@ extern "C" void app_main(void)
         bool phone_begin_ok = phone->begin();
         if (!phone_begin_ok) {
             ESP_LOGW("main", "Phone begin failed, continuing anyway");
-        }
-
-        /* 从注册表初始化应用列表（就像先看一眼应用商店有哪些 APP）*/
-        std::vector<systems::base::Manager::RegistryAppInfo> inited_apps;
-        if (!phone->initAppFromRegistry(inited_apps)) {
-            ESP_LOGE("main", "Init app registry failed");
         } else {
-            // 指定安装顺序：环境监测 → 手势检测 → 指南针
-            std::vector<std::string> ordered_app_names = {"Environment", "Gesture Detect", "Compass"};
-            // 按顺序安装应用
-            bool install_ok = phone->installAppFromRegistry(inited_apps, &ordered_app_names);
-            if (!install_ok) {
-                // 可能是显示屏排线松了之类的硬件问题
-                // 不要紧，继续走，后面还有兜底方案
-                ESP_LOGW("main", "Install app registry failed (display issue?), but continuing with direct sensor startup");
+            /* 从注册表初始化应用列表（就像先看一眼应用商店有哪些 APP）*/
+            std::vector<systems::base::Manager::RegistryAppInfo> inited_apps;
+            if (!phone->initAppFromRegistry(inited_apps)) {
+                ESP_LOGE("main", "Init app registry failed");
             } else {
-                ESP_LOGI("main", "All apps installed successfully");
+                // 指定安装顺序：环境监测 → 手势检测 → 指南针
+                std::vector<std::string> ordered_app_names = {"Environment", "Gesture Detect", "Compass"};
+                // 按顺序安装应用
+                bool install_ok = phone->installAppFromRegistry(inited_apps, &ordered_app_names);
+                if (!install_ok) {
+                    // 可能是显示屏排线松了之类的硬件问题
+                    // 不要紧，继续走，后面还有兜底方案
+                    ESP_LOGW("main", "Install app registry failed (display issue?), but continuing with direct sensor startup");
+                } else {
+                    ESP_LOGI("main", "All apps installed successfully");
+                }
             }
         }
     }
@@ -261,7 +281,16 @@ extern "C" void app_main(void)
         }
     }
 
+    // 启动心率传感器（从单例拿实例）
+    auto hr_app = esp_brookesia::apps::Max30102::requestInstance();
+    if (hr_app) {
+        ESP_LOGI("main", "Starting MAX30102 Heart Rate sensor collection");
+        if (!hr_app->startSensorCollection()) {
+            ESP_LOGW("main", "Failed to start MAX30102 Heart Rate sensor collection");
+        }
+    }
+
     // 到此，主函数就执行完了。
     // 注意：ESP32 的 app_main 结束后，系统不会停止，
-    // 前面启动的那些 FreeRTOS 任务（比如 debug_serial_task）会在后台继续运行
+    // 前面启动的那些 FreeRTOS 任务（比如 debug_serial_task）会在后台继续运行 
 }

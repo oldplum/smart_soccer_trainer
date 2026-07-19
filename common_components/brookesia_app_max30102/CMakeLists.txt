@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "esp_brookesia_app_max30102.cpp"
+    INCLUDE_DIRS
+        "."
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../main"
+    REQUIRES
+        brookesia_system_phone
+        espressif__esp-boost
+        espressif__esp-lib-utils
+        driver
+        espressif__i2c_bus
+        espressif__esp_board_manager
+)
