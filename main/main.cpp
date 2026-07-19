@@ -23,6 +23,16 @@
 #include "esp_lib_utils.h"
 #include "esp_board_manager.h"
 #include "soccer_data_sync.h"
+#include "wifi_manager.h"
+#include "http_uploader.h"
+
+/* WiFi 热点配置 - 请修改为您自己手机热点或路由器的名称和密码 */
+#define WIFI_SSID           "oldplum's Y7000"
+#define WIFI_PASSWORD       "liyuhan061218"
+
+/* 后端服务器上传接口地址 */
+// 提示：使用 "AUTO" 关键字，当开发板连上您电脑开的 Wi-Fi 热点时，程序会自动获取您电脑的 IP，免去手动修改 IP 的麻烦
+#define BACKEND_UPLOAD_URL  "http://AUTO:8000/api/device/upload"
 
 using namespace esp_brookesia;
 using namespace esp_brookesia::systems::phone;
@@ -288,6 +298,19 @@ extern "C" void app_main(void)
         if (!hr_app->startSensorCollection()) {
             ESP_LOGW("main", "Failed to start MAX30102 Heart Rate sensor collection");
         }
+    }
+
+    /* ========== 第 6 步：启动 Wi-Fi 连接与后台 HTTP 数据上报任务 ========== */
+    ESP_LOGI("main", "Initializing WiFi & Starting HTTP Backend Uploader...");
+    if (wifi_manager_init(WIFI_SSID, WIFI_PASSWORD)) {
+        // 每 2000 毫秒 (2秒) 向后台发送一次传感器状态 JSON 包
+        if (http_uploader_start(BACKEND_UPLOAD_URL, 2000)) {
+            ESP_LOGI("main", "HTTP Backend Uploader task started successfully");
+        } else {
+            ESP_LOGE("main", "Failed to start HTTP Backend Uploader task");
+        }
+    } else {
+        ESP_LOGE("main", "WiFi initialization failed");
     }
 
     // 到此，主函数就执行完了。

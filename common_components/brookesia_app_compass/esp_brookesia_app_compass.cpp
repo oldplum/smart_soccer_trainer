@@ -76,7 +76,7 @@ Compass::Compass()
     , bmi_handle_(nullptr)
     , i2c_bus_(nullptr)
     , bmi2_dev_(nullptr)
-    , mag_cal_{{0, 0, 0}, {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, false}
+    , mag_cal_{{0, 0, 0}, {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, true}
 , current_heading_(0.0f)
 , current_mag_data_{0}
 , bmm_running_(false)
@@ -600,9 +600,9 @@ void Compass::calibrateMagnetometer()
             int8_t rslt = bmi2_get_sensor_data(&sensor_data, bmi2_dev_);
             if (rslt == BMI2_OK) {
                 /* Parse accelerometer data */
-                float acc_x_mg = (float)sensor_data.acc.x / 16384.0f;
-                float acc_y_mg = -(float)sensor_data.acc.y / 16384.0f;
-                float acc_z_mg = -(float)sensor_data.acc.z / 16384.0f;
+                float acc_x_mg = (float)sensor_data.acc.x / ACC_COUNTS_PER_G;
+                float acc_y_mg = -(float)sensor_data.acc.y / ACC_COUNTS_PER_G;
+                float acc_z_mg = -(float)sensor_data.acc.z / ACC_COUNTS_PER_G;
 
                 /* Parse gyroscope data */
                 float gyro_x_dps = (float)sensor_data.gyr.x / 16.4f;
