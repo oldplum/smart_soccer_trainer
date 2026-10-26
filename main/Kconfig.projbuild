@@ -1,0 +1,25 @@
+menu "Smart Soccer Trainer Configuration"
+
+    config SST_WIFI_SSID
+        string "Wi-Fi SSID"
+        default "your_hotspot_ssid"
+        help
+            Wi-Fi 热点名称（手机热点或路由器 SSID）。
+            通过 `idf.py menuconfig` 配置，构建时以 CONFIG_SST_WIFI_SSID 宏注入。
+
+    config SST_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default "your_hotspot_password"
+        help
+            Wi-Fi 密码。**不要**把真实密码提交到仓库：
+            在 `sdkconfig` 里配置（sdkconfig 已被 .gitignore 忽略），
+            或使用 `idf.py -DSST_WIFI_PASSWORD=xxx build` 临时覆盖。
+
+    config SST_BACKEND_UPLOAD_URL
+        string "Backend upload URL"
+        default "http://AUTO:8000/api/device/upload"
+        help
+            后端上传接口完整 URL。
+            使用 AUTO 关键字时，开发板连上电脑热点后会自动把 AUTO 替换为网关 IP。
+
+endmenu

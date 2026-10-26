@@ -212,17 +212,32 @@ smart_soccer_trainer/
 
 ### 2. Wi-Fi 与后端配置
 
-打开 [main/main.cpp](file:///e:/esp_projects/smart_soccer_trainer/main/main.cpp)，修改您的 Wi-Fi 热点及后台接口配置：
+Wi-Fi 热点与后端地址已从源码中移出，改为通过 Kconfig 配置，**不要把真实密码提交到仓库**。
 
-```cpp
-/* WiFi 热点配置 - 请修改为您手机热点或路由器的名称和密码 */
-#define WIFI_SSID           "your_hotspot_ssid"
-#define WIFI_PASSWORD       "your_hotspot_password"
+方式一：menuconfig（推荐）
 
-/* 后端服务器上传接口地址 */
-// 使用 "AUTO" 关键字时，开发板连上电脑热点会自动把 AUTO 替换为电脑的网关 IP
-#define BACKEND_UPLOAD_URL  "http://AUTO:8000/api/device/upload"
+```bash
+idf.py menuconfig
+# -> Smart Soccer Trainer Configuration
+#    -> Wi-Fi SSID / Wi-Fi password / Backend upload URL
 ```
+
+方式二：直接写本地 `sdkconfig`（该文件已在 `.gitignore` 中）
+
+```ini
+CONFIG_SST_WIFI_SSID="your_hotspot_ssid"
+CONFIG_SST_WIFI_PASSWORD="your_hotspot_password"
+CONFIG_SST_BACKEND_UPLOAD_URL="http://AUTO:8000/api/device/upload"
+```
+
+方式三：命令行临时覆盖（密码不落盘）
+
+```bash
+idf.py -DSST_WIFI_PASSWORD=your_hotspot_password build
+```
+
+> 后端地址中的 `AUTO` 关键字会在开发板连上电脑热点后自动替换为网关 IP，
+> 免去手动改 IP 的麻烦。
 
 ### 3. 编译与烧录
 

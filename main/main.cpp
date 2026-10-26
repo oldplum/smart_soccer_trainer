@@ -26,13 +26,17 @@
 #include "wifi_manager.h"
 #include "http_uploader.h"
 
-/* WiFi 热点配置 - 请修改为您自己手机热点或路由器的名称和密码 */
-#define WIFI_SSID           "oldplum's Y7000"
-#define WIFI_PASSWORD       "liyuhan061218"
+/* WiFi 热点与后端配置
+ * 通过 `idf.py menuconfig` -> "Smart Soccer Trainer Configuration" 配置，
+ * 或直接写入本地 sdkconfig（该文件已在 .gitignore 中，不会被提交）。
+ * 请勿把真实 SSID/密码硬编码在本文件里。 */
+#define WIFI_SSID           CONFIG_SST_WIFI_SSID
+#define WIFI_PASSWORD       CONFIG_SST_WIFI_PASSWORD
 
-/* 后端服务器上传接口地址 */
-// 提示：使用 "AUTO" 关键字，当开发板连上您电脑开的 Wi-Fi 热点时，程序会自动获取您电脑的 IP，免去手动修改 IP 的麻烦
-#define BACKEND_UPLOAD_URL  "http://AUTO:8000/api/device/upload"
+/* 后端服务器上传接口地址
+ * 提示：默认值中的 "AUTO" 会在开发板连上电脑热点时被自动替换为网关 IP，
+ * 免去手动改 IP 的麻烦。 */
+#define BACKEND_UPLOAD_URL  CONFIG_SST_BACKEND_UPLOAD_URL
 
 using namespace esp_brookesia;
 using namespace esp_brookesia::systems::phone;
